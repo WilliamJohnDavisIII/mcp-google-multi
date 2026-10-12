@@ -858,6 +858,19 @@ describe('RefreshStore session cap (F11)', () => {
     expect(s.rotate(a2, 20000)!.sub).toBe('a');
     expect(s.rotate(a1, 20000)).toBeNull();
   });
+
+  it('ranks drops by last use, not by creation order', () => {
+    const { s } = storeAt({ maxFamiliesPerSub: 3 });
+    const a1 = s.issue(0, 'a'); // oldest created, but rotated most recently below
+    const a2 = s.issue(1000, 'a');
+    const a3 = s.issue(2000, 'a');
+    const r1 = s.rotate(a1, 5000)!.token; // a1's usedAt becomes 5000, newest of the three
+    const a4 = s.issue(6000, 'a'); // 4th family: must drop the least recently USED one (a2), not the oldest-created (a1)
+    expect(s.rotate(r1, 7000)!.sub).toBe('a');
+    expect(s.rotate(a3, 7000)!.sub).toBe('a');
+    expect(s.rotate(a4, 7000)!.sub).toBe('a');
+    expect(s.rotate(a2, 7000)).toBeNull();
+  });
 });
 
 describe('RefreshStore pre-auth cost', () => {
