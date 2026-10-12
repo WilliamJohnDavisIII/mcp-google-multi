@@ -637,11 +637,16 @@ export class RefreshStore {
    * most `limit` of its live sessions remain; dropping one here is the same
    * as deleting it from `data.families` / `data.active` on a revoke, so it
    * can never be presented again (reuse detection for every OTHER family is
-   * untouched). Only `sub`'s own entries are ever inspected. */
-  private enforceFamilyCap(data: RefreshData, sub: string, limit: number, lines: string[]): void {
+   * untouched). Only `sub`'s own entries are ever inspected.
+   *
+   * `keepKey` is the family just issued: it is excluded from the ranking so
+   * a clock step back, or a concurrent rotate's `usedAt = max(usedAt, nowMs)`
+   * racing ahead of it under the lock, can never make the brand-new family
+   * look like the least recently used one and drop itself. */
+  private enforceFamilyCap(data: RefreshData, sub: string, limit: number, lines: string[], keepKey: string): void {
     const entries: { at: number; drop: () => void }[] = [];
     for (const [k, f] of Object.entries(data.families)) {
-      if (f.sub !== sub) continue;
+      if (f.sub !== sub || k === keepKey) continue;
       entries.push({
         at: f.usedAt,
         drop: () => {
@@ -660,9 +665,10 @@ export class RefreshStore {
         },
       });
     }
-    if (entries.length <= limit) return;
+    // +1 accounts for the kept family, which stays live but is never ranked.
+    if (entries.length + 1 <= limit) return;
     entries.sort((a, b) => a.at - b.at);
-    for (const e of entries.slice(0, entries.length - limit)) e.drop();
+    for (const e of entries.slice(0, entries.length + 1 - limit)) e.drop();
   }
 
   private newFamilyId(data: RefreshData): Buffer {
@@ -679,9 +685,10 @@ export class RefreshStore {
       const lines: string[] = [];
       const { data } = this.load(nowMs, lines);
       const fid = this.newFamilyId(data);
+      const fidKey = fid.toString('base64url');
       const { token, cur } = mintR1(key, fid, 0);
-      data.families[fid.toString('base64url')] = { sub, gen: 0, cur, createdAt: nowMs, usedAt: nowMs };
-      if (this.maxFamiliesPerSub !== undefined) this.enforceFamilyCap(data, sub, this.maxFamiliesPerSub, lines);
+      data.families[fidKey] = { sub, gen: 0, cur, createdAt: nowMs, usedAt: nowMs };
+      if (this.maxFamiliesPerSub !== undefined) this.enforceFamilyCap(data, sub, this.maxFamiliesPerSub, lines, fidKey);
       this.save(data);
       this.emit(lines);
       return token;

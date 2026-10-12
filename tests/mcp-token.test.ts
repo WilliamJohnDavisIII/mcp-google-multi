@@ -850,6 +850,14 @@ describe('RefreshStore session cap (F11)', () => {
     s.issue(2000, 'a');
     expect(s.rotate(a1, 3000)!.sub).toBe('a');
   });
+
+  it('a clock step back at issue never drops the family it just issued', () => {
+    const { s } = storeAt({ maxFamiliesPerSub: 1 });
+    const a1 = s.issue(10000, 'a');
+    const a2 = s.issue(5000, 'a'); // nowMs went backwards; a2 must still survive
+    expect(s.rotate(a2, 20000)!.sub).toBe('a');
+    expect(s.rotate(a1, 20000)).toBeNull();
+  });
 });
 
 describe('RefreshStore pre-auth cost', () => {
