@@ -333,11 +333,23 @@ declared explicitly (`mcp-google-multi/identity`, `/compose`, `/registry`,
 `/oauth-as`, `/accounts`, `/token-store`, `/http-transport`, `/http-config`,
 `/client`, `/config-file`, `/fs-atomic`, `/master-key`, `/mcp-token`,
 `/boot-gates`, `/tenant-purge`, `/doctor`, `/write-control`,
-`/scope-catalog`, `/auth`). Any OTHER deep import into `dist/` (previously unrestricted, e.g.
+`/scope-catalog`, `/auth`, `/usage-metrics`, `/metrics-tap`). Any OTHER deep
+import into `dist/` (previously unrestricted, e.g.
 `mcp-google-multi/dist/trim.js`) now fails with
 `ERR_PACKAGE_PATH_NOT_EXPORTED`. The CLI (`npx mcp-google-multi ...`) and the
 MCP server entry are unaffected. If you relied on an undeclared deep import,
 open an issue naming the module so it can be promoted to a declared entry.
+
+`/usage-metrics` and `/metrics-tap` are new declared entries: a host serving
+several callers over one process can drive its own `Metrics` instance instead
+of the single-owner default. `InitOptions` gains `eventLog` (default true;
+false means no `events.jsonl` / `events.1.jsonl` is ever created, only the
+day aggregate) and `extraErrorSlugs` (default none; a host's own closed slug
+set, unioned with `KNOWN_ERROR_SLUGS` for that instance, each entry matching
+`/^[A-Za-z][A-Za-z0-9_]{0,63}$/` or dropped). `sequencingEnabled: false` now
+also keeps `mid` off the next event: an escape-hatch method resolved during
+one `google_api_call` no longer attaches to whichever `google_api_call`
+records next, which on a shared instance could belong to a different caller.
 
 `buildRegistry(server, ctx)` resolves every registered tool through `ctx`:
 the client, token reads, account emails (the From header, `drive_transfer`'s
@@ -644,6 +656,18 @@ throws `E_REFRESH_STORE_UNREADABLE` for a file that does not decrypt).
 token to a short non-secret family tag (for rate limiting and log correlation)
 without touching the store.
 
+`new RefreshStore(path, masterKey, { maxFamiliesPerSub, ... })` optionally
+bounds how many live refresh-token families one subject may hold (both
+formats counted together). Unset by default: unlimited, as before. When an
+`issue()` would put a subject over the limit, that subject's own
+least-recently-used family (by its last issue or rotation time) is dropped,
+repeatedly if needed, until it fits; a dropped family is logged exactly like
+a revoked one (`refresh family dropped: cap tag=...`) and can never be
+presented again. Only the subject signing in triggers this, and only its own
+families are ever touched; every other subject's sessions are unaffected. A
+value that is not a positive whole number throws `E_REFRESH_OPTION_INVALID`,
+same as `maxAgeSec`/`idleSec`.
+
 `/oauth-as`: `AuthServerConfig.refreshMaxAgeSec` and `refreshIdleSec` set
 `maxAgeSec` and `idleSec` on the refresh store `buildAuthServer` creates, and
 that store now logs revoked, dropped and expired families through
@@ -651,7 +675,11 @@ that store now logs revoked, dropped and expired families through
 `AuthServerDeps.refreshStore` throws `E_REFRESH_OPTION_CONFLICT`; set them on
 that store instead. The owner's server sets neither. With a lifetime set, keep
 the host clock synchronized: a clock that jumps forward ends every session
-(clients sign in again), and the log says so.
+(clients sign in again), and the log says so. `refreshMaxFamiliesPerSub` sets
+`maxFamiliesPerSub` on that same store the same way: unset by default
+(unlimited; the owner's server sets none), validated as a positive whole
+number, and in the same `E_REFRESH_OPTION_CONFLICT` if a `refreshStore` is
+also injected.
 
 `/mcp-token`: `ReplayGuard` no longer forgets a spent state, approval or
 authorization code that is still live to make room. Before, a full guard
