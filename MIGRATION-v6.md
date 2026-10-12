@@ -656,6 +656,18 @@ throws `E_REFRESH_STORE_UNREADABLE` for a file that does not decrypt).
 token to a short non-secret family tag (for rate limiting and log correlation)
 without touching the store.
 
+`new RefreshStore(path, masterKey, { maxFamiliesPerSub, ... })` optionally
+bounds how many live refresh-token families one subject may hold (both
+formats counted together). Unset by default: unlimited, as before. When an
+`issue()` would put a subject over the limit, that subject's own
+least-recently-used family (by its last issue or rotation time) is dropped,
+repeatedly if needed, until it fits; a dropped family is logged exactly like
+a revoked one (`refresh family dropped: cap tag=...`) and can never be
+presented again. Only the subject signing in triggers this, and only its own
+families are ever touched; every other subject's sessions are unaffected. A
+value that is not a positive whole number throws `E_REFRESH_OPTION_INVALID`,
+same as `maxAgeSec`/`idleSec`.
+
 `/oauth-as`: `AuthServerConfig.refreshMaxAgeSec` and `refreshIdleSec` set
 `maxAgeSec` and `idleSec` on the refresh store `buildAuthServer` creates, and
 that store now logs revoked, dropped and expired families through

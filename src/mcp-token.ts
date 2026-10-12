@@ -482,14 +482,27 @@ export interface RefreshStoreOptions {
   maxAgeSec?: number;
   /** Idle lifetime in seconds, counted from the last issue or rotation. Unset: unlimited. */
   idleSec?: number;
+  /** Max live refresh-token families per subject (both formats). Unset:
+   * unlimited (default; the single-owner server passes none). When issuing a
+   * new family would put a subject over this, that subject's own
+   * least-recently-used family is dropped (by its last issue or rotation
+   * time) until it fits; a dropped family behaves exactly like a revoked
+   * one. Only the subject signing in ever triggers it, and only its own
+   * families are ever touched. */
+  maxFamiliesPerSub?: number;
   /** Server-side log for a revoked, dropped or expired family. Never given a token or a subject. */
   log?: (line: string) => void;
 }
 
-function lifetimeMs(name: string, v: unknown): number | undefined {
+function positiveInt(name: string, v: unknown): number | undefined {
   if (v === undefined) return undefined;
   if (typeof v !== 'number' || !Number.isSafeInteger(v) || v <= 0) throw new Error(`E_REFRESH_OPTION_INVALID: ${name} must be a positive whole number`);
-  return v * 1000;
+  return v;
+}
+
+function lifetimeMs(name: string, v: unknown): number | undefined {
+  const n = positiveInt(name, v);
+  return n === undefined ? undefined : n * 1000;
 }
 
 /**
@@ -505,6 +518,7 @@ export class RefreshStore {
   private readonly log: (line: string) => void;
   private readonly maxAgeMs: number | undefined;
   private readonly idleMs: number | undefined;
+  private readonly maxFamiliesPerSub: number | undefined;
   private macKey: Buffer | undefined;
   // Set once a load finds no earlier-release record. Nothing here adds one,
   // so from then on a legacy-shaped token is refused before the lock.
@@ -517,6 +531,7 @@ export class RefreshStore {
   ) {
     this.maxAgeMs = lifetimeMs('maxAgeSec', options.maxAgeSec);
     this.idleMs = lifetimeMs('idleSec', options.idleSec);
+    this.maxFamiliesPerSub = positiveInt('maxFamiliesPerSub', options.maxFamiliesPerSub);
     this.log = options.log ?? (() => undefined);
   }
 
@@ -618,6 +633,38 @@ export class RefreshStore {
     }
   }
 
+  /** Evict `sub`'s own least-recently-used sessions (both formats) so at
+   * most `limit` of its live sessions remain; dropping one here is the same
+   * as deleting it from `data.families` / `data.active` on a revoke, so it
+   * can never be presented again (reuse detection for every OTHER family is
+   * untouched). Only `sub`'s own entries are ever inspected. */
+  private enforceFamilyCap(data: RefreshData, sub: string, limit: number, lines: string[]): void {
+    const entries: { at: number; drop: () => void }[] = [];
+    for (const [k, f] of Object.entries(data.families)) {
+      if (f.sub !== sub) continue;
+      entries.push({
+        at: f.usedAt,
+        drop: () => {
+          delete data.families[k];
+          lines.push(`refresh family dropped: cap tag=${familyTag(Buffer.from(k, 'base64url'))}`);
+        },
+      });
+    }
+    for (const [t, r] of Object.entries(data.active)) {
+      if (r.sub !== sub) continue;
+      entries.push({
+        at: r.issuedAt,
+        drop: () => {
+          delete data.active[t];
+          lines.push(`refresh family dropped: cap tag=${familyTag(r.family)}`);
+        },
+      });
+    }
+    if (entries.length <= limit) return;
+    entries.sort((a, b) => a.at - b.at);
+    for (const e of entries.slice(0, entries.length - limit)) e.drop();
+  }
+
   private newFamilyId(data: RefreshData): Buffer {
     let fid: Buffer;
     do fid = randomBytes(16);
@@ -634,6 +681,7 @@ export class RefreshStore {
       const fid = this.newFamilyId(data);
       const { token, cur } = mintR1(key, fid, 0);
       data.families[fid.toString('base64url')] = { sub, gen: 0, cur, createdAt: nowMs, usedAt: nowMs };
+      if (this.maxFamiliesPerSub !== undefined) this.enforceFamilyCap(data, sub, this.maxFamiliesPerSub, lines);
       this.save(data);
       this.emit(lines);
       return token;

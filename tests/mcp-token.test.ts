@@ -737,7 +737,7 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
   });
 
   it('L8 a lifetime that is not a positive whole number throws', () => {
-    for (const name of ['maxAgeSec', 'idleSec'] as const) {
+    for (const name of ['maxAgeSec', 'idleSec', 'maxFamiliesPerSub'] as const) {
       for (const bad of [0, -1, 1.5, NaN, Infinity, '10']) {
         expect(() => new RefreshStore('/unused', KEY, { [name]: bad as number }), `${name}=${String(bad)}`).toThrow(`E_REFRESH_OPTION_INVALID: ${name} must be a positive whole number`);
       }
@@ -796,6 +796,59 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
     seedLegacy(file, KEY, { [L1]: { sub: 'owner', issuedAt: 1000, family: 'fam-a' } });
     const r = s.rotate(L1, 50_000)!;
     expect(s.rotate(r.token, 101_000)).toBeNull();
+  });
+});
+
+describe('RefreshStore session cap (F11)', () => {
+  const KEY = 'master-key-for-test';
+  let dir: string;
+  afterEach(() => dir && rmSync(dir, { recursive: true, force: true }));
+  const storeAt = (options: RefreshStoreOptions = {}) => {
+    dir = mkdtempSync(path.join(tmpdir(), 'gm-cap-'));
+    const file = path.join(dir, 'mcp-tokens.enc');
+    const logs: string[] = [];
+    return { s: new RefreshStore(file, KEY, { log: (l) => logs.push(l), ...options }), file, logs };
+  };
+
+  it("C1 the cap+1th issue for one subject drops its least recently used family and leaves its other families and every other subject's families working", () => {
+    const { s, logs } = storeAt({ maxFamiliesPerSub: 2 });
+    const a1 = s.issue(0, 'a');
+    const a2 = s.issue(1000, 'a');
+    const b1 = s.issue(500, 'b');
+    const a3 = s.issue(2000, 'a'); // 3rd live family for 'a': drops a1 (LRU)
+    expect(s.rotate(a1, 3000)).toBeNull();
+    expect(s.rotate(a2, 3000)!.sub).toBe('a');
+    expect(s.rotate(a3, 3000)!.sub).toBe('a');
+    expect(s.rotate(b1, 3000)!.sub).toBe('b');
+    expect(logs.some((l) => l.startsWith('refresh family dropped: cap'))).toBe(true);
+  });
+
+  it('C2 legacy active records of that subject count toward the cap', () => {
+    const { s, file } = storeAt({ maxFamiliesPerSub: 2 });
+    const legacy = legacyTok('cap-legacy');
+    seedLegacy(file, KEY, { [legacy]: { sub: 'a', issuedAt: 100, family: 'fam-a' } });
+    const a1 = s.issue(200, 'a'); // total for 'a': legacy(1) + a1(1) = 2, no drop
+    expect(onDisk(file, KEY).active[legacy]).toBeDefined();
+    const a2 = s.issue(300, 'a'); // total: legacy(1) + a1(1) + a2(1) = 3 > 2, drops the legacy record (oldest)
+    expect(onDisk(file, KEY).active[legacy]).toBeUndefined();
+    expect(s.rotate(a1, 3000)!.sub).toBe('a');
+    expect(s.rotate(a2, 3000)!.sub).toBe('a');
+  });
+
+  it("reuse of a dropped family's refresh token is refused like a revoked one", () => {
+    const { s } = storeAt({ maxFamiliesPerSub: 1 });
+    const a1 = s.issue(0, 'a');
+    const a2 = s.issue(1000, 'a'); // drops a1
+    expect(s.rotate(a1, 2000)).toBeNull();
+    expect(s.rotate(a2, 2000)!.sub).toBe('a');
+  });
+
+  it('without the option, a subject may hold any number of live families (unchanged default)', () => {
+    const { s } = storeAt();
+    const a1 = s.issue(0, 'a');
+    s.issue(1000, 'a');
+    s.issue(2000, 'a');
+    expect(s.rotate(a1, 3000)!.sub).toBe('a');
   });
 });
 
