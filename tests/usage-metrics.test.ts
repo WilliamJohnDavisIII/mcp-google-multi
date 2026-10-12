@@ -27,7 +27,7 @@ afterEach(() => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
-function make(dir: string, opts: { now?: () => number; mono?: () => number; log?: (l: string) => void; sequencingEnabled?: boolean } = {}) {
+function make(dir: string, opts: { now?: () => number; mono?: () => number; log?: (l: string) => void; sequencingEnabled?: boolean; extraErrorSlugs?: readonly string[] } = {}) {
   return new Metrics({
     dir,
     version: '6.0.0-test',
@@ -37,6 +37,7 @@ function make(dir: string, opts: { now?: () => number; mono?: () => number; log?
     monotonic: opts.mono,
     log: opts.log ?? (() => {}),
     sequencingEnabled: opts.sequencingEnabled,
+    extraErrorSlugs: opts.extraErrorSlugs,
   });
 }
 
@@ -143,6 +144,27 @@ describe('recording and derivations', () => {
     const raw = fs.readFileSync(path.join(dir, 'agg', fs.readdirSync(path.join(dir, 'agg'))[0]), 'utf-8');
     expect(raw).not.toContain('@');
     expect(readDay(dir).tools.drive_search.err.other).toBe(1);
+  });
+
+  it('extraErrorSlugs: an envelope slug in the extras is counted under its name, one outside both sets is other, a malformed extra is dropped, and without the option the day file is byte-identical to today', async () => {
+    const dir = tmp();
+    const m = make(dir, { extraErrorSlugs: ['tenant_quota_exceeded', '123bad', 'has space'] });
+    await m.wrap(entry('drive_search'), async () => errResult({ error: 'tenant_quota_exceeded', message: 'x', retriable: false, account: 'a' }))({});
+    await m.wrap(entry('drive_search'), async () => errResult({ error: 'truly_unknown_slug', message: 'x', retriable: false, account: 'a' }))({});
+    await m.wrap(entry('drive_search'), async () => errResult({ error: '123bad', message: 'x', retriable: false, account: 'a' }))({});
+    m.flush();
+    const day = readDay(dir);
+    expect(day.tools.drive_search.err.tenant_quota_exceeded).toBe(1);
+    expect(day.tools.drive_search.err.other).toBe(2);
+    expect(day.tools.drive_search.err['123bad']).toBeUndefined();
+
+    const dirDefault = tmp();
+    const mDefault = make(dirDefault);
+    await mDefault.wrap(entry('drive_search'), async () => errResult({ error: 'tenant_quota_exceeded', message: 'x', retriable: false, account: 'a' }))({});
+    await mDefault.wrap(entry('drive_search'), async () => errResult({ error: 'truly_unknown_slug', message: 'x', retriable: false, account: 'a' }))({});
+    await mDefault.wrap(entry('drive_search'), async () => errResult({ error: '123bad', message: 'x', retriable: false, account: 'a' }))({});
+    mDefault.flush();
+    expect(readDay(dirDefault).tools.drive_search.err).toEqual({ other: 3 });
   });
 
   it('retry self-correction: hinted error then success inside the window', async () => {

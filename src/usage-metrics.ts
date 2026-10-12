@@ -37,6 +37,7 @@ const TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
 // Declared argument keys are camelCase identifiers, some dotted
 // (groupKey.id, debugOptions.enableDebugging).
 const ARG_KEY_RE = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/;
+const EXTRA_ERROR_SLUG_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
 /** Union of every `error:` slug literal emitted anywhere in src/ (kept honest
  * by a set-equality grep test). Anything outside buckets to `other`. */
@@ -190,6 +191,11 @@ export interface InitOptions {
    * such as an audit trail; the day aggregate keeps the same counters without
    * order. */
   eventLog?: boolean;
+  /** Default none. A host's own closed slug set, unioned with
+   * KNOWN_ERROR_SLUGS for this instance only; each entry must match
+   * /^[A-Za-z][A-Za-z0-9_]{0,63}$/ or it is dropped silently. Absent,
+   * behavior is byte-identical to today. */
+  extraErrorSlugs?: readonly string[];
 }
 
 function emptyDay(day: string): DayAgg {
@@ -301,10 +307,13 @@ export class Metrics {
   private disabled = false;
   private readonly sequencing: boolean;
   private readonly eventLog: boolean;
+  private readonly errorSlugs: ReadonlySet<string>;
 
   constructor(opts: InitOptions) {
     this.sequencing = opts.sequencingEnabled !== false;
     this.eventLog = opts.eventLog !== false;
+    const extras = (opts.extraErrorSlugs ?? []).filter((s) => EXTRA_ERROR_SLUG_RE.test(s));
+    this.errorSlugs = extras.length ? new Set([...KNOWN_ERROR_SLUGS, ...extras]) : KNOWN_ERROR_SLUGS;
     this.dir = opts.dir ?? path.join(stateDir(opts.env), METRICS_DIR_NAME);
     this.aggDir = path.join(this.dir, 'agg');
     this.eventsFile = path.join(this.dir, 'events.jsonl');
@@ -402,7 +411,7 @@ export class Metrics {
         const first = r?.content?.[0]?.text;
         if (typeof first === 'string' && first.length < 65_536) {
           const env = JSON.parse(first) as { error?: unknown; hint?: unknown };
-          if (typeof env.error === 'string') slug = KNOWN_ERROR_SLUGS.has(env.error) ? env.error : 'other';
+          if (typeof env.error === 'string') slug = this.errorSlugs.has(env.error) ? env.error : 'other';
           hinted = typeof env.hint === 'string' && env.hint.length > 0;
         }
       } catch { slug = 'other'; }
