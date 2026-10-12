@@ -175,10 +175,13 @@ export interface InitOptions {
   now?: () => number;
   monotonic?: () => number;
   log?: (line: string) => void;
-  /** Default true. The retry and bigram chains correlate CONSECUTIVE calls,
-   * which is only meaningful when one caller owns the whole process; a host
-   * serving several callers sets false so their sequences never cross-link.
-   * DayAgg shape is unchanged (retries/bigrams stay empty maps). */
+  /** Default true. Three chains correlate CONSECUTIVE calls, which is only
+   * meaningful when one caller owns the whole process: the retry and bigram
+   * chains, and pendingMid (the escape hatch's resolved methodId, attached to
+   * the next google_api_call event's `mid`). A host serving several callers
+   * sets false so none of the three ever cross-link a call between tenants.
+   * DayAgg shape is unchanged (retries/bigrams stay empty maps);
+   * escape.methods still counts every resolved call either way. */
   sequencingEnabled?: boolean;
 }
 
@@ -454,7 +457,7 @@ export class Metrics {
     if (fan) event.fan = fan;
     // mid: set mid-dispatch by recordEscapeMethod, attached to the escape
     // call's own event line (per-event field, never a synthetic event).
-    if (entry.name === 'google_api_call' && this.pendingMid) {
+    if (this.sequencing && entry.name === 'google_api_call' && this.pendingMid) {
       event.mid = this.pendingMid;
       this.pendingMid = undefined;
     }
@@ -470,7 +473,7 @@ export class Metrics {
         this.deltas.escape.unknown_method += 1;
       } else if (idOrNull.length <= METHOD_ID_MAX && METHOD_ID_RE.test(idOrNull)) {
         addInto(this.deltas.escape.methods, idOrNull);
-        this.pendingMid = idOrNull;
+        if (this.sequencing) this.pendingMid = idOrNull;
       }
       this.dirty = true;
     } catch { /* never throws outward */ }

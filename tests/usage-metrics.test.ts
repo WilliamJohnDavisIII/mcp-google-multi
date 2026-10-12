@@ -199,6 +199,18 @@ describe('recording and derivations', () => {
     expect(day.tools.gmail_read.n).toBe(1);
   });
 
+  it('sequencingEnabled=false: an escape method recorded during one google_api_call is not attached to the next google_api_call event, and escape.methods still counts it', async () => {
+    const dir = tmp();
+    const m = make(dir, { sequencingEnabled: false });
+    m.recordEscapeMethod('sheets.spreadsheets.values.update');
+    await m.wrap(entry('google_api_call'), async () => okResult())({});
+    m.flush();
+    const day = readDay(dir);
+    expect(day.escape.methods).toEqual({ 'sheets.spreadsheets.values.update': 1 });
+    const line = JSON.parse(fs.readFileSync(path.join(dir, 'events.jsonl'), 'utf-8').trim().split('\n')[0]);
+    expect(line.mid).toBeUndefined();
+  });
+
   it('bigrams chain in order and break on a 5-minute gap', async () => {
     const dir = tmp();
     let t = 0;
