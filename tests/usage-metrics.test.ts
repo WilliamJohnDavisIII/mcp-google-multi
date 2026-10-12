@@ -404,6 +404,43 @@ describe('storage discipline', () => {
     expect(line.tool).toBe('gmail_search');
     expect(line.chars).toBe('le64');
   });
+
+  it('eventLog=false: record, recordRpc, flush, a day rollover and shutdown never create events.jsonl or events.1.jsonl, and the day file is byte-identical to the same run with eventLog=true', async () => {
+    const run = async (eventLog: boolean) => {
+      const dir = tmp();
+      let nowMs = Date.parse('2026-09-20T10:11:42.000Z');
+      let mono = 0;
+      const m = new Metrics({
+        dir, version: '6.0.0-test', mode: 'lazy', transport: 'stdio',
+        now: () => nowMs,
+        monotonic: () => mono,
+        log: () => {},
+        eventLog,
+      });
+      const w = m.wrap(entry('gmail_search'), async () => okResult());
+      await w({});
+      m.recordRpc('tool_not_found');
+      m.flush();
+      nowMs += 2 * 86_400_000; // cross a day boundary
+      mono += 50;
+      await w({});
+      m.flush();
+      m.shutdown();
+      return dir;
+    };
+    const dirOff = await run(false);
+    expect(fs.existsSync(path.join(dirOff, 'events.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(dirOff, 'events.1.jsonl'))).toBe(false);
+    expect(fs.readdirSync(dirOff).sort()).toEqual(['agg']);
+
+    const dirOn = await run(true);
+    const aggOff = fs.readdirSync(path.join(dirOff, 'agg')).sort();
+    const aggOn = fs.readdirSync(path.join(dirOn, 'agg')).sort();
+    expect(aggOff).toEqual(aggOn);
+    for (const f of aggOff) {
+      expect(fs.readFileSync(path.join(dirOff, 'agg', f), 'utf-8')).toBe(fs.readFileSync(path.join(dirOn, 'agg', f), 'utf-8'));
+    }
+  });
 });
 
 describe('egress guard (structural)', () => {

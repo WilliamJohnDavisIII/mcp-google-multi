@@ -183,6 +183,13 @@ export interface InitOptions {
    * DayAgg shape is unchanged (retries/bigrams stay empty maps);
    * escape.methods still counts every resolved call either way. */
   sequencingEnabled?: boolean;
+  /** Default true. When false, no events.jsonl / events.1.jsonl is ever
+   * created or appended to; only agg/ exists. A host serving several callers
+   * sets false: each event line carries a minute timestamp, the boot id and a
+   * per-process sequence number, which can be joined against a per-caller log
+   * such as an audit trail; the day aggregate keeps the same counters without
+   * order. */
+  eventLog?: boolean;
 }
 
 function emptyDay(day: string): DayAgg {
@@ -293,9 +300,11 @@ export class Metrics {
   private failures = 0;
   private disabled = false;
   private readonly sequencing: boolean;
+  private readonly eventLog: boolean;
 
   constructor(opts: InitOptions) {
     this.sequencing = opts.sequencingEnabled !== false;
+    this.eventLog = opts.eventLog !== false;
     this.dir = opts.dir ?? path.join(stateDir(opts.env), METRICS_DIR_NAME);
     this.aggDir = path.join(this.dir, 'agg');
     this.eventsFile = path.join(this.dir, 'events.jsonl');
@@ -326,7 +335,7 @@ export class Metrics {
         }
       }
       this.pruneAggs();
-      this.pruneEventAge(this.eventsFile);
+      if (this.eventLog) this.pruneEventAge(this.eventsFile);
     } catch (e) {
       this.log(`local usage metrics: init failed (${(e as Error).message}); disabled for this process\n`);
       this.disabled = true;
@@ -442,26 +451,28 @@ export class Metrics {
       this.lastTool = { name: entry.name, at: nowM };
     }
 
-    const event: Record<string, unknown> = {
-      ts: new Date(this.now()).toISOString().slice(0, 16) + ':00Z',
-      boot: this.bootId,
-      seq: this.seq++,
-      tool: entry.name,
-      ok,
-      ms: Math.round(ms),
-      chars: charsBucket(chars),
-      src: 'handler',
-    };
-    if (slug) event.err = slug;
-    if (hinted !== undefined) event.hint = hinted;
-    if (fan) event.fan = fan;
-    // mid: set mid-dispatch by recordEscapeMethod, attached to the escape
-    // call's own event line (per-event field, never a synthetic event).
-    if (this.sequencing && entry.name === 'google_api_call' && this.pendingMid) {
-      event.mid = this.pendingMid;
-      this.pendingMid = undefined;
+    if (this.eventLog) {
+      const event: Record<string, unknown> = {
+        ts: new Date(this.now()).toISOString().slice(0, 16) + ':00Z',
+        boot: this.bootId,
+        seq: this.seq++,
+        tool: entry.name,
+        ok,
+        ms: Math.round(ms),
+        chars: charsBucket(chars),
+        src: 'handler',
+      };
+      if (slug) event.err = slug;
+      if (hinted !== undefined) event.hint = hinted;
+      if (fan) event.fan = fan;
+      // mid: set mid-dispatch by recordEscapeMethod, attached to the escape
+      // call's own event line (per-event field, never a synthetic event).
+      if (this.sequencing && entry.name === 'google_api_call' && this.pendingMid) {
+        event.mid = this.pendingMid;
+        this.pendingMid = undefined;
+      }
+      this.events.push(JSON.stringify(event));
     }
-    this.events.push(JSON.stringify(event));
     this.dirty = true;
   }
 
@@ -532,12 +543,14 @@ export class Metrics {
       } else {
         addInto(this.deltas.rpc, RPC_CODES.has(kind) ? `rpc_error_${kind}` : 'rpc_error_other');
       }
-      this.events.push(JSON.stringify({
-        ts: new Date(this.now()).toISOString().slice(0, 16) + ':00Z',
-        boot: this.bootId, seq: this.seq++,
-        tool: tool && TOOL_NAME_RE.test(tool) ? tool : 'other',
-        ok: false, ms: 0, chars: 'le64', src: 'rpc',
-      }));
+      if (this.eventLog) {
+        this.events.push(JSON.stringify({
+          ts: new Date(this.now()).toISOString().slice(0, 16) + ':00Z',
+          boot: this.bootId, seq: this.seq++,
+          tool: tool && TOOL_NAME_RE.test(tool) ? tool : 'other',
+          ok: false, ms: 0, chars: 'le64', src: 'rpc',
+        }));
+      }
       this.dirty = true;
     } catch { /* never throws outward */ }
   }
