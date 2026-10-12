@@ -333,11 +333,23 @@ declared explicitly (`mcp-google-multi/identity`, `/compose`, `/registry`,
 `/oauth-as`, `/accounts`, `/token-store`, `/http-transport`, `/http-config`,
 `/client`, `/config-file`, `/fs-atomic`, `/master-key`, `/mcp-token`,
 `/boot-gates`, `/tenant-purge`, `/doctor`, `/write-control`,
-`/scope-catalog`, `/auth`). Any OTHER deep import into `dist/` (previously unrestricted, e.g.
+`/scope-catalog`, `/auth`, `/usage-metrics`, `/metrics-tap`). Any OTHER deep
+import into `dist/` (previously unrestricted, e.g.
 `mcp-google-multi/dist/trim.js`) now fails with
 `ERR_PACKAGE_PATH_NOT_EXPORTED`. The CLI (`npx mcp-google-multi ...`) and the
 MCP server entry are unaffected. If you relied on an undeclared deep import,
 open an issue naming the module so it can be promoted to a declared entry.
+
+`/usage-metrics` and `/metrics-tap` are new declared entries: a host serving
+several callers over one process can drive its own `Metrics` instance instead
+of the single-owner default. `InitOptions` gains `eventLog` (default true;
+false means no `events.jsonl` / `events.1.jsonl` is ever created, only the
+day aggregate) and `extraErrorSlugs` (default none; a host's own closed slug
+set, unioned with `KNOWN_ERROR_SLUGS` for that instance, each entry matching
+`/^[A-Za-z][A-Za-z0-9_]{0,63}$/` or dropped). `sequencingEnabled: false` now
+also keeps `mid` off the next event: an escape-hatch method resolved during
+one `google_api_call` no longer attaches to whichever `google_api_call`
+records next, which on a shared instance could belong to a different caller.
 
 `buildRegistry(server, ctx)` resolves every registered tool through `ctx`:
 the client, token reads, account emails (the From header, `drive_transfer`'s
