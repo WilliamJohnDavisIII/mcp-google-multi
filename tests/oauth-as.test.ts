@@ -1161,11 +1161,25 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
   it('O3 a lifetime together with an injected refreshStore throws; an injected store alone works', () => {
     const cfg = { base: BASE, resourceUri: `${BASE}/mcp`, secret, ownerEmails: ['owner@x.example'], cimdIssuers: ['claude.ai'], masterKey: 'mk', refreshStorePath: path.join(tmp, 'mcp-tokens.enc') };
     const refreshStore = new RefreshStore(path.join(tmp, 'injected.enc'), 'mk');
-    for (const over of [{ refreshMaxAgeSec: 60 }, { refreshIdleSec: 60 }]) {
+    for (const over of [{ refreshMaxAgeSec: 60 }, { refreshIdleSec: 60 }, { refreshMaxFamiliesPerSub: 10 }]) {
       expect(() => buildAuthServer({ ...cfg, ...over }, { refreshStore })).toThrow(/^E_REFRESH_OPTION_CONFLICT: /);
     }
     expect(() => buildAuthServer(cfg, { refreshStore })).not.toThrow();
     expect(() => buildAuthServer({ ...cfg, refreshIdleSec: 60 })).not.toThrow();
+  });
+
+  it('O4 refreshMaxFamiliesPerSub reaches the refresh store buildAuthServer creates: a subject over the cap has its least-recently-used session dropped', async () => {
+    const port = await startWith({ refreshMaxFamiliesPerSub: 1 });
+    const first = await signIn(port);
+    const second = await signIn(port); // same owner subject: 2nd sign-in exceeds the cap of 1, drops the 1st
+    expectInvalidGrant(await refreshAt(port, 1_000, first));
+    const r = await refreshAt(port, 1_000, second);
+    expect(r.status).toBe(200);
+  });
+
+  it('a lifetime that is not a positive whole number throws, same as refreshMaxAgeSec/refreshIdleSec', () => {
+    const cfg = { base: BASE, resourceUri: `${BASE}/mcp`, secret, ownerEmails: ['owner@x.example'], cimdIssuers: ['claude.ai'], masterKey: 'mk', refreshStorePath: path.join(tmp, 'mcp-tokens.enc') };
+    expect(() => buildAuthServer({ ...cfg, refreshMaxFamiliesPerSub: 0 })).toThrow('E_REFRESH_OPTION_INVALID: maxFamiliesPerSub must be a positive whole number');
   });
 
   it('O5 revoked and expired families reach the log with a tag, never the token, subject or email', async () => {

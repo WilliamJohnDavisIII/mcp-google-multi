@@ -56,6 +56,10 @@ export interface AuthServerConfig {
   /** `idleSec` of that store: sessions end this long after their last
    * refresh. Unset: unlimited. */
   refreshIdleSec?: number;
+  /** `maxFamiliesPerSub` of that store: bounds how many live refresh-token
+   * families one subject may hold, dropping its least-recently-used one to
+   * make room. Unset: unlimited. */
+  refreshMaxFamiliesPerSub?: number;
   /** Default true. The clientless `flow=alias_reauth` link names an alias with
    * no tenant binding, so a multi-tenant deployment sets false: with several
    * tenants an alias name alone is ambiguous and the branch becomes a
@@ -333,11 +337,11 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => undefined);
   // Silently dropping a lifetime the caller asked for would leave sessions unlimited.
-  if (deps.refreshStore && (config.refreshMaxAgeSec !== undefined || config.refreshIdleSec !== undefined)) {
-    throw new Error('E_REFRESH_OPTION_CONFLICT: refreshMaxAgeSec and refreshIdleSec configure the refresh store buildAuthServer creates; set them on the injected refreshStore instead');
+  if (deps.refreshStore && (config.refreshMaxAgeSec !== undefined || config.refreshIdleSec !== undefined || config.refreshMaxFamiliesPerSub !== undefined)) {
+    throw new Error('E_REFRESH_OPTION_CONFLICT: refreshMaxAgeSec, refreshIdleSec and refreshMaxFamiliesPerSub configure the refresh store buildAuthServer creates; set them on the injected refreshStore instead');
   }
   const refresh =
-    deps.refreshStore ?? new RefreshStore(config.refreshStorePath, config.masterKey, { maxAgeSec: config.refreshMaxAgeSec, idleSec: config.refreshIdleSec, log });
+    deps.refreshStore ?? new RefreshStore(config.refreshStorePath, config.masterKey, { maxAgeSec: config.refreshMaxAgeSec, idleSec: config.refreshIdleSec, maxFamiliesPerSub: config.refreshMaxFamiliesPerSub, log });
   const nowSec = () => Math.floor(now() / 1000);
   // A full guard is refused at whatever rate the caller likes, so its line is
   // written at most once a minute (or at once after the clock stepped back).

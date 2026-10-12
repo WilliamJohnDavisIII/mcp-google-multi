@@ -675,7 +675,11 @@ that store now logs revoked, dropped and expired families through
 `AuthServerDeps.refreshStore` throws `E_REFRESH_OPTION_CONFLICT`; set them on
 that store instead. The owner's server sets neither. With a lifetime set, keep
 the host clock synchronized: a clock that jumps forward ends every session
-(clients sign in again), and the log says so.
+(clients sign in again), and the log says so. `refreshMaxFamiliesPerSub` sets
+`maxFamiliesPerSub` on that same store the same way: unset by default
+(unlimited; the owner's server sets none), validated as a positive whole
+number, and in the same `E_REFRESH_OPTION_CONFLICT` if a `refreshStore` is
+also injected.
 
 `/mcp-token`: `ReplayGuard` no longer forgets a spent state, approval or
 authorization code that is still live to make room. Before, a full guard
