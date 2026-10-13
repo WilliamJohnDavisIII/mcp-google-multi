@@ -1,9 +1,25 @@
 import { describe, it, expect } from 'vitest';
+import { isAllowed, type Policy } from '../src/write-control.js';
 import { accountSet, toolHarness, parseResult } from './_tool-harness.js';
 
 // safe-writes treats a move to Trash like any other non-privileged write,
 // because the owner can still recover the item; every other delete,
 // including emptying Trash, stays refused.
+
+const S = (n: string) => `https://www.googleapis.com/auth/${n}`;
+const safe: Policy = { profile: 'safe-writes', readOnly: false, allow: [], deny: [] };
+
+describe('safe-writes: privileged scope beats the Trash exception', () => {
+  it('gmail_trash with a privileged scope is refused', () => {
+    const gmail_trash_with_admin = {
+      name: 'gmail_trash',
+      service: 'gmail',
+      cud: 'delete' as const,
+      scopes: [S('admin.directory.users')],
+    };
+    expect(isAllowed(gmail_trash_with_admin, safe)).toBe(false);
+  });
+});
 
 describe('safe-writes: moving to Trash is permitted', () => {
   it('gmail_trash succeeds', async () => {
