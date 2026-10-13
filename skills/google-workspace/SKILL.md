@@ -65,7 +65,7 @@ broad `gmail_search` on a timer. Two cheaper patterns:
 
 - **`gmail_list_history(startHistoryId, historyTypes)`** with a
   `startHistoryId` you stored from a previous `gmail_get_profile` or
-  `gmail_read` response. It returns exactly the mailbox changes since that
+  `gmail_list_history` response. It returns exactly the mailbox changes since that
   point (messages added/deleted, labels added/removed), optionally filtered
   by `historyTypes`. Store the newest history ID you observe and pass it
   next time.
@@ -94,8 +94,7 @@ discarding most of it:
   `drive_search(maxResults)` and `contacts_search(pageSize)` are two
   examples; check `{service}_discover` or the reference table for the exact
   name), and follow `nextPageToken` rather than assuming a short list is the
-  whole answer. A capped list reports `truncated` and a count precisely so
-  you don't mistake "first page" for "everything".
+  whole answer. Where a list reports `truncated`, there is more to fetch.
 - On Gmail, pass `headers` on `gmail_read(headers)` or
   `gmail_read_batch(headers)` to fetch only `id`, `threadId`, `labelIds`, and
   the named header values, skipping full body decoding entirely when you
@@ -106,16 +105,17 @@ discarding most of it:
 Reads are never gated. Writes (create/update/delete) are deny-by-default and
 controlled by the deployment's `GOOGLE_PROFILE`:
 
-- **`read-only`** (the default on many deployments): every write refused.
+- **`read-only`** (the default): every write refused.
 - **`safe-writes`**: ordinary creates and updates on your own data are
   allowed, and so is moving an item to or from Trash (`gmail_trash`,
   `drive_trash`, and their untrash equivalents) since that is recoverable.
-  Permanent deletes (emptying Trash, a hard Gmail or Drive delete,
-  `drive_transfer` with `move: true`) and privileged writes (anything needing
+  Permanent deletes (emptying Trash, a hard Gmail or Drive delete),
+  `drive_transfer` with `move: true`, and privileged writes (anything needing
   an admin, Vault, reseller, or script scope, or registering a push channel)
-  stay refused regardless of this profile.
+  stay refused under this profile.
 - **`full-writes`**: everything permitted by OAuth scope and the account's
-  grants.
+  grants, privileged writes included. An operator's allow and deny patterns
+  can widen or narrow any profile.
 
 A write a profile refuses comes back as `{ error: "write_disabled", message,
 hint, retriable: false }` rather than a silent no-op or a generic failure.
@@ -156,7 +156,7 @@ If a service has no curated or generated tool for the operation you need
 The escape hatch runs through the same write-control policy as named tools
 (the read/create/update/delete class is derived from the method's HTTP verb
 and name), returns JSON only (binary media is refused with a pointer to
-`drive_download` / `drive_export`), and caps a JSON response at 100k
-characters with a hint to narrow the request. Prefer a named curated or
+`drive_download` / `drive_export`), and a response over about 100k
+characters may be cut by the client, so narrow a large request. Prefer a named curated or
 generated tool when one exists: it is more token-lean and better typed than
 building the call by hand.
