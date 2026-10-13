@@ -36,7 +36,7 @@ Existing encrypted tokens keep decrypting: upgrading alone never forces a re-aut
 | 10 | Email send | `body` is Markdown; `htmlBody` removed | rewrite callers ([§3](#3-email-format-breaking-both-directions)) | `E_HTMLBODY_REMOVED` |
 | 11 | Removed | `alertcenter` bundle removed | drop it from any scope config | `E_UNKNOWN_BUNDLE` |
 | 12 | Auth (opt-in) | HTTP `/mcp` + OAuth authorization server | opt-in only | n/a |
-| 13 | Auth | OAuth redirect URI now configurable | none (default preserved) | n/a |
+| 13 | Auth | local OAuth redirect: fixed `localhost:4242` → ephemeral loopback port | none with a Desktop app OAuth client | n/a |
 | 14 | Security | CRLF header-injection closed in email compose | none (input hardening) | n/a |
 | 15 | Behavior | an undeclared tool argument is now refused, not dropped | none for a correct caller; see [§4.3](#43-undeclared-arguments-are-refused-not-dropped) | `unknown_argument` |
 | 16 | Errors | caller-side 4xx split out of `upstream_error` | rebranch if you keyed on the slug; see [§4.4](#44-error-slugs-are-narrower) | `bad_request`, `internal` |
@@ -58,7 +58,7 @@ node -v            # must be >= 22
 nvm install 22 && nvm use 22
 ```
 
-`doctor` adds a line: `Node version: OK 22.x (>=22 required)`.
+`doctor`'s Runtime section prints `Node.js 22.x (>= 22)`.
 
 **Free win (already yours on current v5.x):** the switch from the `googleapis` monolith to right-sized `@googleapis/*` packages shrank install/download ~85% (≈218 MB → ≈32 MB; npx ≈18.6 MB → ≈4.2 MB) with byte-identical types. This shipped as a v5 minor *ahead* of v6, so a current v5 user already has it.
 
@@ -132,7 +132,7 @@ This is the one behavior change likely to touch your callers.
 
 | Direction | v5 | v6 | Your action |
 |---|---|---|---|
-| **Read** | HTML-only body flattened to text | HTML-only body → **Markdown** (via turndown); `text/plain` mail is unchanged; a new `bodyFormat` field is `markdown` or `text/plain` | branch on `bodyFormat`; pass `rawHtml:true` when you need the raw HTML source |
+| **Read** | HTML-only body flattened to text | HTML-only body → **Markdown** (via turndown); `text/plain` mail is unchanged; a new `bodyFormat` field is `markdown`, `plain`, or `html` (with `rawHtml:true`) | branch on `bodyFormat`; pass `rawHtml:true` when you need the raw HTML source |
 | **Send** | `body` = plain text; `htmlBody` = optional HTML | `body` = **Markdown** (rendered to a `multipart/alternative` with an auto-generated HTML part); **`htmlBody` is removed** | author `body` as Markdown; drop `htmlBody`; use `allowRawHtml:true` for the rare raw-HTML case |
 
 **Silent trap: read this even if you never used `htmlBody`.** A v5 caller that passed only `body` with *plain prose containing Markdown metacharacters* now has it rendered as Markdown. Text like `# 1 priority`, `Cost: $5 * 3`, `> quoted`, or `[x] done` will render as a heading, emphasis, a blockquote, or a task item. If your prose isn't meant to be Markdown, escape the metacharacters or send it with `allowRawHtml:true` wrapping pre-escaped HTML.
@@ -155,7 +155,7 @@ Passing `htmlBody` now returns `E_HTMLBODY_REMOVED` with the exact rewrite. Colo
 +   allowRawHtml: true })
 ```
 
-Additive email conveniences you now also get (nothing to migrate): attachments on both `gmail_send` and `gmail_create_draft`, reply auto-fill of to/cc/subject from `replyToMessageId`, `gmail_read_batch`, and an agent-callable contact/alias resolver. The old hand-rolled header encoders (a CRLF-injection surface) are gone: MailComposer validates and encodes headers and rejects embedded newlines.
+Additive email conveniences you now also get (nothing to migrate): attachments on both `gmail_send` and `gmail_create_draft`, reply auto-fill of to/cc/subject from `replyToMessageId`, `gmail_read_batch`, and an agent-callable contact/alias resolver (`contacts_resolve`). The old hand-rolled header encoders (a CRLF-injection surface) are gone: MailComposer encodes headers, and a pre-check refuses CR/LF in `from`/`to`/`cc`/`subject` with `E_HEADER_INJECTION`.
 
 ---
 
@@ -275,7 +275,7 @@ Only the first can be branched on. The second gives a different `error` value fo
 
 All three are now the first shape. Concretely:
 
-- **16 argument guards** across `admin`, `chat`, `contacts`, `docs`, `sheets` and `tasks` (the "no fields to update" and "supply one of X" checks) now return `invalid_params` with the fault in `message` and the list of accepted fields in `hint`.
+- **The argument guards** in the curated tools (the "no fields to update" and "supply one of X" checks) now return `invalid_params` with the fault in `message` and the list of accepted fields in `hint`.
 - **The account wizard** (`account_add`, `account_reauth`, `account_write_config`) returns envelopes. The slugs are `E_ENV_ACCOUNTS_MODE`, `E_VALIDATION`, `E_ALIAS_EXISTS`, `E_UNKNOWN_BUNDLE`, `elicitation_unsupported`, `confirmation_declined`, `invalid_client`, `auth_required` and `internal`. Wizard **success** output stays prose: it is an onboarding report meant to be read, not parsed.
 - **`account` is now carried** by `write_disabled`, by the `drive_transfer` and `drive_read` outcomes, and by the `docs_read` tab and heading errors, so a fan-out result can be attributed to the account that produced it. It is formally optional, because a few failures genuinely happen before any account is resolved.
 - **`ambiguous_heading` is gone**; `docs_read` reports an ambiguous heading as `ambiguous`, the slug already used elsewhere for the same condition.
@@ -751,14 +751,14 @@ limit on `/authorize`, `/callback` and `/token` in front of it.
 
 ### 5.1 New: HTTP transport + `/mcp` OAuth (opt-in, additive)
 
-stdio stays the default. HTTP exists mainly so Claude Code's native `/mcp` Authenticate button (`claude mcp login`), keychain, and auto-refresh work, and so the claude.ai connector can reach the server.
+stdio stays the default. HTTP exists mainly so Claude Code's native `/mcp` Authenticate button, keychain, and auto-refresh work, and so the claude.ai connector can reach the server.
 
 | Item | Behavior |
 |---|---|
 | Model | **Federate-and-hold.** The server is its own OAuth 2.1 authorization server to the client (audience-bound token) and separately runs the Google flow, holding Google tokens server-side. It never passes the client token to Google, and never accepts a Google token from the client. |
 | Owner gate | `MCP_OWNER_EMAILS` allowlists the Google account(s) allowed to authenticate. It is **required** whenever `MCP_TRANSPORT` includes `http`; empty ⇒ startup fails with `E_OWNER_EMAILS_REQUIRED`. |
 | Client registration | CIMD **plus** a minimal DCR `/register` endpoint, on by default. |
-| Redirect URI | Now configurable (was hardcoded `http://localhost:4242/oauth2callback`); the default is preserved for local use. Remote HTTP uses `${MCP_PUBLIC_URL}/callback`. |
+| Redirect URI | The local `auth` flow binds an ephemeral loopback port (`http://localhost:<port>/oauth2callback`, was fixed at `4242`), which a Desktop app OAuth client accepts. Remote HTTP uses `${MCP_PUBLIC_URL}/callback`, registered on a Web application OAuth client. |
 | Turn it on | `MCP_TRANSPORT=http` + the connector URL in your client. Full walkthrough in **[docs/http-setup.md](./docs/http-setup.md)**, including the Cloudflare **named** tunnel path (quick tunnels are demo-only) and one-click Render/Railway deploys. |
 | Trust caveat | Behind a tunnel, **Cloudflare terminates TLS and can see the bearer token and all Gmail/Drive bytes in transit.** This is a trust boundary you accept, not a bug. |
 
@@ -774,7 +774,7 @@ The encrypted-store crypto is unchanged (AES-256-GCM). Existing `<alias>.enc` fi
 | You change a scope profile | Yes: that account only |
 | You move an account to `admin` | Yes: that account |
 
-v6 names the exact accounts that need re-auth instead of letting calls 403 later. Where your client supports it, an expired Google refresh token (the 7-day "Testing" mode trap) is surfaced as an MCP auth challenge so the client re-runs the flow and resumes the original call: self-healing that depends on the client honoring the challenge. The durable fix is still setting your Google app's Publishing status to **In production**.
+v6 names the exact accounts that need re-auth instead of letting calls 403 later. An expired Google refresh token (the 7-day "Testing" mode trap) returns `reauth_required` with a hint: over stdio the `auth --account` command, over HTTP a server-signed re-auth link. The durable fix is setting your Google app's Publishing status to **In production**.
 
 Re-auth a named account with:
 
@@ -789,7 +789,7 @@ mcp-google-multi auth --account <alias>
 | Item | Behavior |
 |---|---|
 | v5 | `MASTER_KEY` was hard-required in env; the server exited if it was missing. |
-| v6 | Resolves in order: **env → OS keychain → generate-on-setup.** Generated keys are stored in the OS keychain with a `0600`-file fallback. `doctor` shows provenance (`MASTER_KEY: env | keychain | file`). |
+| v6 | Resolves in order: **env → OS keychain → `0600` `master.key` file in the config directory → generate.** A generated key is always written to that file, with a best-effort OS keychain copy. `doctor` shows provenance (`MASTER_KEY provenance: env`, `keychain`, `file` or `generated`). |
 | Hard safety guard | If encrypted tokens already exist and **no** key is recoverable, v6 **refuses** to generate a new one and errors (`E_MASTER_KEY_MISSING_TOKENS_EXIST`), routing you to the reset path rather than silently bricking your tokens. |
 | Server deploys | Keep providing `MASTER_KEY` via env / your secret manager. |
 
@@ -809,7 +809,7 @@ This protects tokens **at rest**, not against same-user malware: exactly like a 
 0. Read [Breaking changes at a glance](#breaking-changes-at-a-glance). Back up `~/.config/mcp-google-multi/` (copy the whole directory).
 1. Upgrade Node to ≥ 22 (`nvm install 22 && nvm use 22`).
 2. Keep or place your `.env`. It can stay in the working directory / package root (still loaded), or move to `~/.config/mcp-google-multi/.env`, or point `MCP_GOOGLE_MULTI_ENV` at it. Keep `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and (if set) `MASTER_KEY` there.
-3. Install v6: `npx -y mcp-google-multi@6` (or bump the `claude mcp` entry / your MCPB bundle).
+3. Install v6: `npx -y mcp-google-multi@6` (or bump the `claude mcp` entry / your MCPB bundle). Before 6.0.0 ships, the prereleases are on the npm `staging` (beta) and `dev` (alpha) tags.
 4. Run `mcp-google-multi migrate-config`: writes `config.json` from the old env vars and prints a diff. Nothing is deleted; env still overrides.
 5. Run `mcp-google-multi doctor`. Fix anything red. It exits non-zero on failure; `--json` for scripts; `--report` emits a redacted, paste-ready bug report.
 6. Re-auth only the accounts `doctor` names: `mcp-google-multi auth --account <alias>`.
@@ -823,7 +823,7 @@ This protects tokens **at rest**, not against same-user malware: exactly like a 
 
 v6 does not touch v5 tokens and does not overwrite v5 env, so rollback is clean: reinstall `mcp-google-multi@5`, keep `.env` where v5 expects it (working directory / package root), ignore `config.json`. No data is lost. Traps to know before you downgrade:
 
-- **`MASTER_KEY` keychain-only.** If v6 auto-provisioned `MASTER_KEY` into the OS keychain with **no** env copy, an env-only v5 cannot find it and token decryption breaks. Before downgrading, export the key from the keychain into `.env` (or, during any period you might roll back, keep `MASTER_KEY` in env rather than keychain-only). v6 also mirrors an env key into the keychain on first successful decrypt to reduce this risk.
+- **`MASTER_KEY` not in env.** If v6 auto-provisioned `MASTER_KEY` (into `master.key` and possibly the OS keychain) with **no** env copy, an env-only v5 cannot find it and token decryption breaks. Before downgrading, copy the key from `~/.config/mcp-google-multi/master.key` (or the keychain) into `.env` (or, during any period you might roll back, keep `MASTER_KEY` in env rather than keychain-only). v6 also mirrors an env key into the keychain on first successful decrypt to reduce this risk.
 - **`config.json` version.** A future `config.json` written by a newer v6 (`version: 2`) is rejected by an older reader with `E_CONFIG_VERSION_UNSUPPORTED` rather than crashing: but that also means a newer file won't load on an older binary. If you downgrade across a config-version bump, restore the older `config.json` from your backup (step 0).
 - **MCP refresh tokens after a downgrade across the refresh-format change.** An older release does not recognise the new refresh tokens. Every MCP client therefore signs in again once, and the older release's first write to `mcp-tokens.enc` discards the new-format sessions. Nothing is exposed, and after upgrading again those sessions sign in once more. Do not run two versions against one `mcp-tokens.enc` at the same time: each write by the older one signs out every new-format session.
 - **Do not restore `mcp-tokens.enc` from a backup.** A restored file is behind the clients (they are signed out anyway) and brings back sessions that were revoked for theft since the backup. Delete the file instead; every client signs in once.
