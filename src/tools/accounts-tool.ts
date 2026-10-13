@@ -13,7 +13,7 @@ export interface AccountHealthDeps {
   fileExists: (p: string) => boolean;
   now: () => number;
   /** Scopes required by registered tools — feeds doctor's tool-grained
-   * "registered but not requestable" view (B9). account_list stays compact:
+   * "registered but not requestable" view. account_list stays compact:
    * its report universe is profile ∪ granted only. */
   registeredScopes?: () => string[];
   /** Account view health is derived against; absent = the global registry. */

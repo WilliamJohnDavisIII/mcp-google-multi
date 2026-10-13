@@ -1,4 +1,4 @@
-// S1.12: registry composition, extracted from index.ts so the tenancy module
+// Registry composition, extracted from index.ts so the tenancy module
 // (and tests) can build registries without touching the CLI entrypoint. This
 // module must stay free of import-time side effects of its own: no argv
 // parsing, no process.exit, no prints (accounts.js module-load resolution is

@@ -1,11 +1,11 @@
-// B12: the Streamable HTTP transport host (cc-transport-hosting T2/T3). Owns the
+// The Streamable HTTP transport host. Owns the
 import type { McpServer, Transport, AuthInfo } from "@modelcontextprotocol/server";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 
 // node:http server, the route table, the front guard (Host / Origin / DNS-rebind),
 // and the stateless per-request /mcp dispatch. The OAuth AS endpoints and Bearer
-// verification are a seam filled by B13 (oauth-authorization-server); B12 ships a
-// loopback-owner authenticator so the local-HTTP model works before the AS lands.
+// verification are a seam filled by oauth-as.ts; the default is a loopback-owner
+// authenticator so the local-HTTP model works without the AS.
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Socket } from 'node:net';
@@ -18,10 +18,10 @@ export type AuthOutcome =
   | { ok: true; sub?: string }
   | { ok: false; status: number; body: string; headers?: Record<string, string> };
 
-/** Bearer / owner check for POST /mcp. B12 default = loopback-owner; B13 swaps in JWT verify. */
+/** Bearer / owner check for POST /mcp. Default = loopback-owner; the AS swaps in JWT verify. */
 export type Authenticator = (req: IncomingMessage) => AuthOutcome | Promise<AuthOutcome>;
 
-/** A mounted extra route (the AS endpoints, B13). Return true if it wrote a response. */
+/** A mounted extra route (the AS endpoints). Return true if it wrote a response. */
 export type RouteHandler = (req: IncomingMessage, res: ServerResponse, url: URL) => boolean | Promise<boolean>;
 
 /** What a verified subject resolves to: ITS server plus the per-request hooks
@@ -36,7 +36,7 @@ export interface ServerTarget {
 }
 
 export interface HttpHostOptions {
-  /** The ONE McpServer + registry built at boot (P1 / BV gap #4: never per request). */
+  /** The ONE McpServer + registry built at boot (never per request). */
   server: McpServer;
   config: HttpConfig;
   version: string;
@@ -56,7 +56,7 @@ export interface HttpHostOptions {
     | ServerTarget
     | null
     | { refused: { error: string; message: string } };
-  /** Extra routes keyed by exact pathname (AS endpoints mount here in B13). */
+  /** Extra routes keyed by exact pathname (AS endpoints mount here). */
   routes?: Record<string, RouteHandler>;
   log?: (line: string) => void;
   /** Max /mcp JSON body bytes (DoS guard). */
@@ -91,7 +91,7 @@ const DISPATCH_TIMEOUT_DEFAULT = 120_000;
  * per-call work by however many frames fit in it. */
 const MAX_BATCH_FRAMES = 16;
 
-// A resolveServer refusal's body reaches the wire verbatim (H3 PR1): validated
+// A resolveServer refusal's body reaches the wire verbatim: validated
 // so a host cannot accidentally leak an operator path/env var through a wrongly
 // shaped slug or an overlong message. No new slug literal enters core itself —
 // the slug is always the host's own value.
@@ -122,7 +122,7 @@ export function parseOwnerEmails(env: NodeJS.ProcessEnv = process.env): string[]
 
 /** Front guard: an Origin, if present, must be allowlisted; a Host must be
  * allowlisted. Absent Origin passes (native/CLI/backend clients — the claude.ai
- * connector calls /mcp server-to-server with no Origin, BV-4). */
+ * connector calls /mcp server-to-server with no Origin). */
 export function originAllowed(origin: string | undefined, allowed: string[]): boolean {
   if (!origin) return true;
   return allowed.includes(origin);
@@ -456,8 +456,8 @@ export class HttpTransportHost {
 
     const sub = auth.sub ?? 'owner';
 
-    // Tenant resolution (the seam EE fills): map the verified subject to ITS
-    // server. Absent resolver = the one boot server for every subject.
+    // Tenant resolution (a multi-tenant host fills this seam): map the
+    // verified subject to ITS server. Absent resolver = the one boot server for every subject.
     let target: ServerTarget | null = {
       server: this.opts.server,
       argShapeFor: this.opts.argShapeFor,
@@ -621,7 +621,7 @@ export class HttpTransportHost {
   private health(res: ServerResponse): void {
     const { config, ownerConfigured, version } = this.opts;
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    // No secrets, no owner emails (cc-transport-hosting /health rule).
+    // No secrets, no owner emails.
     res.end(
       JSON.stringify({
         status: 'ok',

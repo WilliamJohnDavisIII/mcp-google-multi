@@ -83,7 +83,7 @@ function describeMethod(m: DiscoveryMethod) {
 }
 
 export function registerEscapeTools(registry: ToolRegistry, policy: Policy, deps: EscapeDeps = {}): void {
-  // Live per-registry account validation (S1.10), same as the curated files.
+  // Live per-registry account validation, same as the curated files.
   const accountEnum = accountArgLive(() => registry.accountAliases()).optional();
   const getClientFn = deps.getClientFn ?? getClient;
   const toolsets = deps.toolsets ?? getToolsets();

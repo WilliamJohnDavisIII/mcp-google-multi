@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { McpServer } from "@modelcontextprotocol/server";
 
-// B8: the `setup` MCP prompt — the honest ceiling for the un-automatable Google
-// Cloud Console prelude (D4). It renders as a native slash command and returns
-// a guided, deep-linked walkthrough. BR9: it states plainly which steps have no
+// The `setup` MCP prompt — the honest ceiling for the un-automatable Google
+// Cloud Console prelude. It renders as a native slash command and returns
+// a guided, deep-linked walkthrough. It states plainly which steps have no
 // creation API, so the user is never left waiting on automation that will never
-// come. BR10: it pre-explains the "unverified app" scare before the consent
+// come. It pre-explains the "unverified app" scare before the consent
 // redirect so a self-hoster is not scared off.
 
 export interface SetupOptions {

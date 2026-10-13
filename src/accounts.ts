@@ -146,7 +146,7 @@ export function resolveAccounts(
 
   // Validate the legacy global override AT BOOT, whatever GOOGLE_TOOLSETS
   // selects — otherwise a typo only surfaces at dispatch time inside
-  // account_list instead of the promised startup error (BR3).
+  // account_list instead of the promised startup error.
   const legacyNames = parseCsv(env.GOOGLE_OPTIONAL_SCOPES);
   if (legacyNames.length > 0) {
     for (const bundle of resolveBundleAliases(legacyNames)) {
@@ -213,7 +213,7 @@ export function resolveAccounts(
     };
   }
 
-  // BR3: unknown bundle names fail loudly (a mis-scoped token is worse than a
+  // Unknown bundle names fail loudly (a mis-scoped token is worse than a
   // clear error); v5 silently filtered them. Null prototype: profile names are
   // user input and must never collide with Object.prototype members.
   const scopeProfiles: Record<string, ScopeProfile> = Object.create(null);
@@ -268,7 +268,7 @@ export function resolveAccounts(
   };
 }
 
-/** A2: env GOOGLE_DEFAULT_ACCOUNT > config.defaultAccount > unset. A configured
+/** env GOOGLE_DEFAULT_ACCOUNT > config.defaultAccount > unset. A configured
  * default naming an unknown alias refuses to start (E_DEFAULT_ACCOUNT_UNKNOWN —
  * deliberately NOT E_CONFIG_INVALID: the config is schema-valid). */
 function resolveDefaultAccount(
@@ -297,7 +297,7 @@ export function fileStamp(filePath: string, version: number): string {
   }
 }
 
-// First-run shim (BC6): env is set and no config.json exists yet — materialize
+// First-run shim: env is set and no config.json exists yet — materialize
 // the file so the wizard has something to edit. Env still wins this session;
 // a write failure must never block boot (warn on stderr and continue).
 function materializeFirstRun(
@@ -393,7 +393,7 @@ export function unknownAliasMessage(aliases: readonly string[], selectors = fals
  * The `account` param schema, empty-registry-safe. A `z.enum` requires at least
  * one value, so a fresh install (zero aliases) would throw at schema-build time
  * (module load) and take down every CLI — including `doctor`, which is meant to
- * REPORT the empty registry (gap #23). Fall back to a plain string when there
+ * REPORT the empty registry. Fall back to a plain string when there
  * are no aliases: no alias exists to enumerate, the server refuses to boot empty
  * anyway, and dispatch validates the account against the live set. */
 export function accountAliasSchemaFor(aliases: readonly string[]): z.ZodType<string> {

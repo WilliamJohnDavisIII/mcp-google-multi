@@ -1,4 +1,4 @@
-// Optional host-supplied remediation hints (H3). A single-owner process never
+// Optional host-supplied remediation hints. A single-owner process never
 // installs one, so every call site keeps today's literal; a multi-tenant host
 // installs one provider for its whole process, like the HTTP reauth linker
 // (reauth-hint.ts). Facts only, never pre-rendered

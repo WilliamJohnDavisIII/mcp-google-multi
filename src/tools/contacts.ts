@@ -41,7 +41,7 @@ function formatContact(person: any) {
   };
 }
 
-// --- A10 contacts_resolve: name -> one canonical email ---------------------
+// --- contacts_resolve: name -> one canonical email -------------------------
 
 export interface ResolveCandidate {
   resourceName: string;
@@ -70,7 +70,7 @@ function pickEmail(c: ResolveCandidate): { value: string; type?: string; primary
 }
 
 /** Deterministic rank tuple; higher wins, compared lexicographically so the
- * first discriminating rule decides (A10 tie-break table). */
+ * first discriminating rule decides. */
 function scoreTuple(c: ResolveCandidate, foldedQuery: string): number[] {
   const exact = foldName(c.displayName) === foldedQuery ? 1 : 0;   // 1. exact over prefix
   const saved = c.source === 'contacts' ? 1 : 0;                    // 2. saved over other-contact
@@ -147,7 +147,7 @@ function dedupeCandidates(list: ResolveCandidate[]): ResolveCandidate[] {
 }
 
 export function registerContactsTools(server: ToolRegistry, deps: CuratedToolDeps = {}): void {
-  // Per-registry, LIVE account enum + injectable client (S1.10): the
+  // Per-registry, LIVE account enum + injectable client: the
   // schema follows the registry's account view at parse time, and the
   // custody path is the context's, not the process global.
   const accountEnum = accountArgLive(() => server.accountAliases()).optional();

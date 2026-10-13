@@ -142,7 +142,7 @@ function isAccountSelector(field: unknown): boolean {
   type Def = { type?: string; innerType?: { _zod?: { def?: Def } } };
   const def = (field as { _zod?: { def?: Def } } | undefined)?._zod?.def;
   if (!def) return false;
-  // A2 made account enums .optional(); unwrap it or fan-out silently dies.
+  // Account enums are .optional(); unwrap it or fan-out silently dies.
   if (def.type === 'optional') return def.innerType?._zod?.def?.type === 'enum';
   return def.type === 'enum';
 }
@@ -204,7 +204,7 @@ export class ToolRegistry {
         idempotentHint: cud !== 'create',
         ...config.annotations,
       };
-      // A12: forced per-call human approval on the irreversible set, even in
+      // Forced per-call human approval on the irreversible set, even in
       // bypass mode. Client-enforced via the wire _meta (Claude Code reads
       // anthropic/* ONLY there); the server verdict stays separate.
       // Every tool also advertises a result-size budget: fat readers declare
@@ -259,7 +259,7 @@ export class ToolRegistry {
                     // Concrete by here: default-account injection wraps this.
                     (args[0] as { account?: unknown } | undefined)?.account as string | undefined,
                   );
-      // A2: the ONE default-account injection site — outside the CUD gate and
+      // The ONE default-account injection site — outside the CUD gate and
       // the fan-out parse so both observe a concrete alias; NOT meta-skipped
       // (that is what covers google_api_call with zero bespoke code). Explicit
       // aliases, "*" and CSV pass through untouched.
@@ -461,7 +461,7 @@ export class ToolRegistry {
   }
 
   /** discover_reset: back to the lean meta-only surface. Clears reveals too.
-   * BV-8: if a client mishandles a SHRINKING tools/list, this degrades to a
+   * If a client mishandles a SHRINKING tools/list, this degrades to a
    * no-op for that session — tools stay callable regardless (graceful
    * dispatch), zero correctness impact. */
   collapse(): boolean {

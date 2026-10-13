@@ -17,12 +17,11 @@ import {
   DEFAULT_SERVER_NAME, type ClientId, type Mode,
 } from '../client-config.js';
 
-// B7: the elicitation-driven account_add / account_reauth wizard. It rebuilds
+// The elicitation-driven account_add / account_reauth wizard. It rebuilds
 // interactive account management on the mutable config.json registry so a
 // running server can add an account without the deployer editing env + running
 // a CLI. Google consent reuses the loopback flow (leg C); the HTTP-transport
-// consent path (${BASE}/authorize) is owned by the OAuth AS and lands with that
-// cluster. account_add over http is gated behind it.
+// consent path (${BASE}/authorize) is owned by the OAuth AS. account_add over http is gated behind it.
 
 export interface AddForm {
   alias: string;
@@ -141,7 +140,7 @@ export function scopeGrantDiff(requested: string[], grantedScope: string | undef
 }
 
 /** Persist a new account row (+ a per-account scope profile when bundles/admin
- * were chosen) through the atomic registry mutation path (BR2). */
+ * were chosen) through the atomic registry mutation path. */
 function writeAccountRow(alias: string, email: string, bundles: string[], admin: boolean): void {
   mutateConfigFile((current) => {
     const next = { ...current, accounts: { ...(current.accounts ?? {}) } };
@@ -178,7 +177,7 @@ function errorResult(slug: string, message: string, hint?: string, account?: str
 
 interface ConsentFailure { ok: false; slug: string; message: string; hint?: string }
 
-/** HTTP-transport consent context (S1.20): set by the HTTP bootstrap. When
+/** HTTP-transport consent context: set by the HTTP bootstrap. When
  * present, runConsent NEVER binds a server-side loopback listener — the
  * user's browser cannot reach the daemon's loopback — and instead hands out
  * a clientless AS consent URL. The injector decides the flow (single-owner =
@@ -213,7 +212,7 @@ function pendingText(alias: string, url: string, pending: readonly string[]): st
 
 /** Run Google consent for `alias` and persist the token. Opens the browser via
  * URL-mode elicitation when the client supports it, else server-side + prints
- * the URL. Returns the granted-scope diff for the S4 report. */
+ * the URL. Returns the granted-scope diff for the validation report. */
 async function runConsent(server: McpServer, alias: string): Promise<{ ok: true; missing: string[] } | { ok: 'pending'; url: string } | ConsentFailure> {
   const { randomBytes } = await import('node:crypto');
   const cfg = getAccountSet().configs[alias];
@@ -362,7 +361,7 @@ export function registerAccountWizardTools(
             'Run the `setup` prompt (/mcp__google-multi__setup) to create an OAuth client, then set them. See docs/google-cloud-setup.md.',
           );
         }
-        // S1: collect the registry row. Arguments win over the form so the
+        // Collect the registry row. Arguments win over the form so the
         // wizard still works in clients without form elicitation (where the
         // interactive path used to dead-end).
         const a = (args ?? {}) as { alias?: string; account?: string; email?: string; bundles?: string; allBundles?: boolean; admin?: boolean };
@@ -388,7 +387,7 @@ export function registerAccountWizardTools(
         const validated = validateAddForm(input, getAccountSet().aliases);
         if (!validated.ok) return errorResult(validated.slug, validated.message, validated.hint, validated.alias);
 
-        // S2: atomic write + make the alias callable without a restart (BR3).
+        // Atomic write + make the alias callable without a restart.
         writeAccountRow(validated.alias, validated.email, validated.bundles, validated.admin);
         invalidateAccountSet();
         // Live account args validate against the refreshed registry already;
@@ -400,11 +399,11 @@ export function registerAccountWizardTools(
           // a client that cannot receive notifications loses nothing but the nudge
         }
 
-        // S3 + S4: consent + validate.
+        // Consent + validate.
         const consent = await runConsent(server, validated.alias);
         if (consent.ok === 'pending') return textResult(pendingText(validated.alias, consent.url, awaitingRestart()));
         if (!consent.ok) return errorResult(consent.slug, consent.message, consent.hint, validated.alias);
-        // B15: offer to register the server with another MCP client.
+        // Offer to register the server with another MCP client.
         return textResult(
           `${s4Text(validated.alias, consent.missing, awaitingRestart())}\nTip: run account_write_config to register this server with another MCP client (Claude Desktop / Cursor / Claude Code).`,
         );

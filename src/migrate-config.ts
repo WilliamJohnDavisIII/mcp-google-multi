@@ -38,7 +38,7 @@ export function runMigrateConfig(env: NodeJS.ProcessEnv = process.env): void {
     desired[alias] = { email };
   }
 
-  // Legacy global scopes (BC7) become an explicit named profile every account
+  // Legacy global scopes become an explicit named profile every account
   // points at, so removing the env var later changes nothing.
   const legacyNames = parseCsv(env.GOOGLE_OPTIONAL_SCOPES);
   let legacyProfile: { bundles: string[] } | undefined;

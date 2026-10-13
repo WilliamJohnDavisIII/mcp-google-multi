@@ -1,4 +1,4 @@
-// B19: encrypted registry export / import (account-registry.md). Moves a whole
+// Encrypted registry export / import. Moves a whole
 // setup to another machine. The bundle is encrypted under a user PASSPHRASE
 // (portable across machines with different MASTER_KEYs) via the token-store AES
 // primitives; the bundled <alias>.enc token files stay encrypted under the

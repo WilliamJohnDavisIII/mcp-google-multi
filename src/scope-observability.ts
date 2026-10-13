@@ -102,7 +102,7 @@ export function scopeHint(scope: string, c: ScopeClassification, alias: string):
           rendered?.hint ??
           (`Scope ${scope} is in ${alias}'s profile but not granted (you unchecked it at consent). ` +
             reauthHint(alias)),
-        // The ONE kind whose retriable the host may flip (Decision 3): the
+        // The ONE kind whose retriable the host may flip: the
         // owner keeps true, a multi-tenant host may report false because the
         // fix needs the user in a browser.
         retriable: rendered?.retriable ?? true,
@@ -214,7 +214,7 @@ export interface ScopesReport {
   notRequestable: {
     addBundle: { scope: string; bundle: string }[];
     /** Runtime-signal bucket: static classification cannot prove account
-     * type; doctor (B9) fills it from observed persistent admin 403s. */
+     * type; doctor fills it from observed persistent admin 403s. */
     accountType: string[];
     unknown: string[];
   };

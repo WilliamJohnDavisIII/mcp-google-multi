@@ -9,7 +9,7 @@ import { handleGoogleApiError, invalidParams } from './_errors.js';
 
 
 export function registerChatTools(server: ToolRegistry, deps: CuratedToolDeps = {}): void {
-  // Per-registry, LIVE account enum + injectable client (S1.10): the
+  // Per-registry, LIVE account enum + injectable client: the
   // schema follows the registry's account view at parse time, and the
   // custody path is the context's, not the process global.
   const accountEnum = accountArgLive(() => server.accountAliases()).optional();

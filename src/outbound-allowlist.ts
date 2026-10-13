@@ -1,7 +1,7 @@
 // Opt-in outbound recipient allowlist for unattended deployments: a
 // prompt-injection blast-radius control (a hijacked agent cannot mail, invite
-// or share outside the operator's list), a safety feature first and an
-// enterprise checkbox second. FREE-core forever (ee-definition-v0 handoff).
+// or share outside the operator's list), a safety feature,
+// available in every install.
 // Off by default: an unset/empty GOOGLE_OUTBOUND_ALLOWLIST gates nothing.
 
 import { hints } from './hint-provider.js';

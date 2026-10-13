@@ -42,9 +42,9 @@ function parseCsvEnv(name: string): string[] {
 }
 
 /**
- * Legacy global override (BC7): a set GOOGLE_OPTIONAL_SCOPES acts as an
+ * Legacy global override: a set GOOGLE_OPTIONAL_SCOPES acts as an
  * implicit "legacy-global" profile applied to every account (env wins over
- * file profiles, cc-config R2). Unknown names now fail loudly (BR3) where v5
+ * file profiles). Unknown names now fail loudly where v5
  * silently dropped them — the intended migration signal.
  */
 function legacyGlobalProfile(): ScopeProfile | null {
@@ -79,7 +79,7 @@ function profileForAccount(alias: string, set: AccountSet = getAccountSet()): Sc
 }
 
 /** Union of every account's resolved bundles: a service registers if ANY
- * account can authorize it; per-account authz happens at call time (BR2). */
+ * account can authorize it; per-account authz happens at call time. */
 export function getOptionalBundles(set: AccountSet = getAccountSet()): string[] {
   const legacy = legacyGlobalProfile();
   if (legacy) return legacy.bundles.filter(b => b !== 'admin');

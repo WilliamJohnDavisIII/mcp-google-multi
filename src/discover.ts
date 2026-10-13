@@ -44,7 +44,7 @@ type WideRegister = (
 
 export function registerDiscoverTools(registry: ToolRegistry, policy: Policy): void {
   const registerMeta = registry.registerMeta as unknown as WideRegister;
-  // Agent-controllable runtime expansion (D3 refinement): reveal the whole
+  // Agent-controllable runtime expansion: reveal the whole
   // curated quality layer for heavy Google work, collapse to reclaim the
   // name/schema context budget after. stdio-only semantics — over stateless
   // HTTP the mode is forced curated and these are no-ops.

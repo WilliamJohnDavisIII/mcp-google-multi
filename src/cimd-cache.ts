@@ -1,4 +1,4 @@
-// H4 F6: GET /authorize is unauthenticated, and a client_id on an allowlisted
+// GET /authorize is unauthenticated, and a client_id on an allowlisted
 // issuer with a path never seen before forces an outbound fetch. So the
 // fetches running at once are capped, one client_id is fetched once however
 // many requests wait on it, and only a document that passed validation is

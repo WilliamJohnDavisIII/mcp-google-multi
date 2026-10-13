@@ -133,7 +133,7 @@ function resolveKey(
   const fromFile = readKeyFile(filePath);
   if (fromFile) return { key: fromFile, provenance: 'file' };
 
-  // Generate-on-setup. The hard guard is cc-security Cgen: minting a fresh
+  // Generate-on-setup. The hard guard: minting a fresh
   // MASTER_KEY while <alias>.enc files exist would silently brick them all.
   if (hardGuard && hasAnyToken()) {
     fail(
@@ -254,7 +254,7 @@ export function noteSuccessfulDecrypt(): void {
   }
 }
 
-/** B6 reset: drop the generated MASTER_KEY material (0600 file + keychain
+/** Reset: drop the generated MASTER_KEY material (0600 file + keychain
  * entry) so the next run re-provisions. Never removes an env-provided key (the
  * deployer owns that; `env:true` flags it so reset can warn). The caller MUST
  * have wiped every .enc token first — regenerating with tokens present would
