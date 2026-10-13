@@ -253,9 +253,8 @@ describe('gen-tools generator', () => {
     expect(first).toBe(committed);
   });
 
-  // First importer of the full 752-tool barrel: cold vitest transform of ~30
-  // generated modules blew the 5s default on a slow Windows runner (flake,
-  // 2026-09-20); the work is real, so the budget must be too.
+  // First importer of the full 752-tool barrel: cold vitest transform of ~30 generated modules once
+  // blew the 5s default on a slow Windows runner; the work is real, so the budget must be too.
   it('matches the committed barrel', { timeout: 30_000 }, async () => {
     const { GENERATED_SERVICES } = await import('../src/tools/generated/index.js');
     const committed = fs.readFileSync(path.join(__dirname, '..', 'src', 'tools', 'generated', 'index.ts'), 'utf-8');

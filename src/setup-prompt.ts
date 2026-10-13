@@ -1,12 +1,8 @@
 import { z } from 'zod';
 import type { McpServer } from "@modelcontextprotocol/server";
 
-// The `setup` MCP prompt — the honest ceiling for the un-automatable Google
-// Cloud Console prelude. It renders as a native slash command and returns
-// a guided, deep-linked walkthrough. It states plainly which steps have no
-// creation API, so the user is never left waiting on automation that will never
-// come. It pre-explains the "unverified app" scare before the consent
-// redirect so a self-hoster is not scared off.
+// The `setup` MCP prompt: a guided, deep-linked walkthrough for the Google
+// Cloud Console steps that have no creation API to automate.
 
 export interface SetupOptions {
   /** Public base URL when serving over HTTP; used for the Web client redirect. */

@@ -2,9 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { SERVICES, GENERATED_GATES } from '../src/services.js';
 import type { AccountSet } from '../src/accounts.js';
 
-// Service gates evaluate against the PASSED account set (a tenant's
-// view), so a forms-scoped tenant registers forms_* while a sibling without
-// the bundle does not — from the same process.
+// Service gates evaluate against the PASSED account set, so a forms-scoped
+// tenant registers forms_* while a sibling without the bundle does not.
 
 const setWith = (opts: { bundles?: string[]; admin?: boolean } = {}): AccountSet =>
   ({

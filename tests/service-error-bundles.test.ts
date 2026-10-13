@@ -26,9 +26,8 @@ function echo() {
   return seen;
 }
 
-// Every curated gated-service 403 text is unchanged with no provider
-// (case A — these assertions pass against today's literals), and carries the
-// right bundle fact to a provider (case B — scope_unknown.bundle).
+// Every curated gated-service 403 text is unchanged with no provider (today's literals), and
+// carries the right bundle fact (scope_unknown.bundle) to a provider when one is installed.
 describe('curated gated-service scope hints carry their bundle', () => {
   it('forms: unchanged text with no provider; bundle "forms" with one', () => {
     const e = handleFormsError(SCOPE_403, acc);

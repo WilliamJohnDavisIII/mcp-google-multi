@@ -7,10 +7,8 @@ import type { Policy } from '../src/write-control.js';
 import { SERVICES } from '../src/services.js';
 import { GENERATED_SERVICES } from '../src/tools/generated/index.js';
 
-// The generic mid-session account_add mechanism. Validation is LIVE
-// (accountArgLive consults the accessor at parse time) and tools/list
-// advertises the CURRENT enum (injected per call over the cached structural
-// schema).
+// The generic mid-session account_add mechanism: validation is LIVE (accountArgLive consults the
+// accessor at parse time) and tools/list advertises the CURRENT enum (injected per call).
 
 const POLICY: Policy = { profile: 'full-writes', readOnly: false, allow: [], deny: [] };
 
@@ -114,10 +112,8 @@ describe('tools/list advertises the LIVE enum', () => {
   });
 });
 
-// The REAL tool schemas, not synthetic enums: curated tools build their
-// account field with accountArgLive, generated tools with accountField(getter).
-// A synthetic z.enum hid that live fields were never recognised as selectors,
-// so no curated read tool accepted "*" or a CSV.
+// The REAL tool schemas, not synthetic enums (curated: accountArgLive, generated: accountField(getter)) , 
+// a synthetic z.enum hid that live fields were never recognised as selectors, so no curated read tool accepted "*" or a CSV.
 describe('real tools keep fan-out and validate live', () => {
   type Shape = Record<string, z.ZodType>;
   function realRegistry(initial: string[]) {

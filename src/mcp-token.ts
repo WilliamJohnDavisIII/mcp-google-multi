@@ -1,8 +1,5 @@
-// Token model: the MCP access
-// token (HS256 JWT, jose-only — AS==RS so no JWKS), the signed self-contained
-// `state` and authorization code, the in-memory single-use replay guard, and
-// the rotated refresh-token store. Keyed by the provisioned MCP_JWT_KEY,
-// so tokens survive a restart as long as the key persists.
+// Token model: the MCP access token (HS256 JWT, jose-only), signed state and
+// authorization code, the replay guard, and the rotated refresh-token store.
 
 import { createHash, createHmac, hkdfSync, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -236,10 +233,8 @@ export class ReplayGuard {
     if (exp < this.earliest) this.earliest = exp;
   }
 
-  // Expired entries are dropped only here, when the map is at the cap: a refusal
-  // costs O(1), and a sweep runs only once something can have expired, at most
-  // once a second. Walking the map from its head on every call is not cheap: a
-  // Map iterator steps over every deleted slot until the table is rebuilt.
+  // Swept only when at the cap (a refusal otherwise costs O(1)), and at most
+  // once a second: a Map iterator steps over every deleted slot until rebuilt.
   private room(nowMs: number): boolean {
     if (this.seen.size < this.cap) return true;
     if (nowMs < this.earliest) return false;
@@ -267,18 +262,16 @@ export interface RefreshRecord {
 /** Store files this release writes; an absent `format` is an earlier release's. */
 const REFRESH_FORMAT = 2;
 
-// r1 token: "r1." + base64url(fid 16 || gen uint32 BE || rand 16 || HMAC-SHA256
-// of those 36 bytes). The dot is outside the base64url alphabet, so an r1
-// token can never be read as an earlier release's 43-character token.
+// r1 token: "r1." + base64url(fid 16 || gen uint32 BE || rand 16 || HMAC-SHA256).
+// The dot is outside the base64url alphabet, so it can't be read as a legacy 43-char token.
 const R1_PREFIX = 'r1.';
 const R1_LENGTH = 94;
 const R1_BODY = 36;
 const R1_BYTES = 68;
 const R1_MAC_DOMAIN = Buffer.from('mcp-google-multi refresh r1\n');
 const R1_KEY_INFO = 'mcp-google-multi:refresh-mac:v1';
-// Every r1 token carries a MAC under a key from MASTER_KEY, so a passphrase
-// key (deriveKey's bare-sha256 branch) would let one leaked token test
-// guesses offline at hash speed. scrypt gives that branch a work factor.
+// A passphrase key (deriveKey's bare-sha256 branch) would otherwise let one
+// leaked r1 token test guesses offline at hash speed; scrypt adds a work factor.
 const R1_SCRYPT_SALT = 'mcp-google-multi:refresh-mac:scrypt:v1';
 const R1_SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
 const GEN_MAX = 0xffffffff;
@@ -422,9 +415,8 @@ function checkFormat(file: string, d: unknown): void {
   }
 }
 
-/** Only well-formed own entries survive, so no lookup lands on an inherited
- * key and no malformed record reaches a liveness test or the token codec.
- * `dirty` says something was dropped. */
+// Only well-formed own entries survive, so no malformed record reaches a
+// liveness test or the token codec; `dirty` says something was dropped.
 function decodeData(d: unknown): { data: RefreshData; dirty: boolean } {
   const data: RefreshData = { families: {}, active: {}, spent: {} };
   const x = (d ?? {}) as Record<string, unknown>;
@@ -628,21 +620,13 @@ export class RefreshStore {
       try {
         this.log(line);
       } catch {
-        // The rotation is already on disk; a log sink must not lose its token.
+        // log sink failure ignored
       }
     }
   }
 
-  /** Evict `sub`'s own least-recently-used sessions (both formats) so at
-   * most `limit` of its live sessions remain; dropping one here is the same
-   * as deleting it from `data.families` / `data.active` on a revoke, so it
-   * can never be presented again (reuse detection for every OTHER family is
-   * untouched). Only `sub`'s own entries are ever inspected.
-   *
-   * `keepKey` is the family just issued: it is excluded from the ranking so
-   * a clock step back, or a concurrent rotate's `usedAt = max(usedAt, nowMs)`
-   * racing ahead of it under the lock, can never make the brand-new family
-   * look like the least recently used one and drop itself. */
+  // Evicts sub's own least-recently-used sessions down to `limit`; keepKey (the
+  // family just issued) is excluded from ranking. See docs/internals.md.
   private enforceFamilyCap(data: RefreshData, sub: string, limit: number, lines: string[], keepKey: string): void {
     const entries: { at: number; drop: () => void }[] = [];
     for (const [k, f] of Object.entries(data.families)) {

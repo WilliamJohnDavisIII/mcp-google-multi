@@ -1,9 +1,5 @@
-// After the setup wizard finalizes an account, offer to register the
-// server with the user's MCP client so they never hand-edit JSON. Pure core
-// (detection + entry building + idempotent apply), deps-injectable for tests.
-// Consent + non-TTY behavior live in the CLI/tool surfaces; secrets are NEVER
-// inlined — the server self-loads its .env from ~/.config/mcp-google-multi, so
-// a stdio entry needs no secret env at all.
+// Registers the server with the user's MCP client so they never hand-edit
+// JSON. Pure core (detection + entry building + idempotent apply), deps-injectable for tests.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import * as readline from 'node:readline';
@@ -58,9 +54,8 @@ function resolve(deps: ClientDeps): Resolved {
   };
 }
 
-// Build paths for the TARGET platform's separators, not the running host's, so
-// the injected `platform` is honored deterministically (a Windows CI runner
-// must still produce posix paths for a linux target, and vice versa).
+// Build paths for the TARGET platform's separators, not the running host's,
+// so the injected `platform` is honored deterministically.
 function pp(r: Resolved): path.PlatformPath {
   return r.platform === 'win32' ? path.win32 : path.posix;
 }
@@ -231,9 +226,8 @@ export function applyFileEntry(
   const next = { ...existing, mcpServers: { ...prevServers, [name]: entry } };
 
   r.mkdirp(pp(r).dirname(p));
-  // Back up the prior file before rewriting so a bad write is recoverable
-  // (these foreign configs are small and not concurrently written by us, so a
-  // backup + direct write is sufficient — our own config.json uses fs-atomic).
+  // Back up before rewriting so a bad write is recoverable; our own
+  // config.json uses fs-atomic, but these small foreign configs don't need it.
   let backup: string | undefined;
   if (priorRaw !== null) {
     backup = `${p}.bak`;

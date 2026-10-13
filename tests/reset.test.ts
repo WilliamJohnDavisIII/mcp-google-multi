@@ -18,7 +18,7 @@ describe('planReset', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.plan.wipeAliases).toEqual(['work', 'personal', 'side']);
-      expect(r.reauth).toEqual(['work', 'personal']); // side had no token
+      expect(r.reauth).toEqual(['work', 'personal']);
     }
   });
 

@@ -1,7 +1,5 @@
-// Multi-tenant boot gates. The free core never sets these — every
-// helper reduces to today's single-owner behavior when no gates are
-// installed. Deliberately a side-effect-free module (accounts.ts/auth.ts
-// resolve env at import time) so the tenancy module can import it cheaply.
+// Multi-tenant boot gates: every helper reduces to single-owner behavior when
+// no gates are installed. Deliberately side-effect-free, unlike accounts.ts/auth.ts.
 
 import { failStartup } from './config-file.js';
 

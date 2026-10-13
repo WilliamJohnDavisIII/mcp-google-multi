@@ -5,9 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// The exports map is the public API surface. Every declared subpath
-// must map onto a real source module (the dist file is a build artifact of
-// exactly that source), and compose must stay import-side-effect-free.
+// The exports map is the public API surface: every declared subpath must map
+// onto a real source module, and compose must stay import-side-effect-free.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');

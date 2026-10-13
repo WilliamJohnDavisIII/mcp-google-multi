@@ -22,9 +22,7 @@ describe('reauthHint', () => {
     expect(asked).toEqual(['a b']);
   });
 
-  // A host-installed provider wins over BOTH the linker and the CLI
-  // default, so a multi-tenant host never needs core's linker to speak
-  // in-band over HTTP.
+  // A host-installed provider wins over BOTH the linker and the CLI default.
   it('a host-installed hint provider wins over the linker and the CLI default', () => {
     setHttpReauthLink(() => 'https://mcp.example.com/authorize?flow=alias_reauth');
     setHintProvider({ render: (c) => ({ hint: `provider:${c.kind}:${(c as { account: string }).account}` }) });

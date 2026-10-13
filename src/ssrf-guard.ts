@@ -1,8 +1,5 @@
-// SSRF guard for every server-side fetch (the CIMD client_id doc).
-// A small AUDITED private-range check, no dependency — HTTPS-only,
-// resolve-then-check ALL addresses (anti-rebind), no redirects followed, and capped size and time. Blocks 10/8, 172.16/12,
-// 192.168/16, 127/8, 169.254/16, 0/8, multicast, ::1, fc00::/7, fe80::/10, and
-// v4-mapped forms.
+// SSRF guard for every server-side fetch (the CIMD client_id doc): HTTPS-only,
+// resolve-then-check ALL addresses (anti-rebind), no redirects, capped size/time.
 
 import { lookup } from 'node:dns/promises';
 import { isIPv4, isIPv6, BlockList } from 'node:net';
@@ -41,10 +38,8 @@ export function isBlockedIPv4(ip: string): boolean {
   return false;
 }
 
-// Built-in subnet math (no hand-rolled IPv6 parsing): blocks loopback,
-// unspecified, ULA, link-local, multicast, and ALL v4-mapped / v4-compatible /
-// NAT64 / 6to4 embeddings (a public host never resolves to those, so blocking
-// the whole range closes the embedded-private-target gap without parsing).
+// Built-in subnet math blocks v4-mapped/NAT64/6to4 embeddings too: a public
+// host never resolves to those, so the whole range closes the embedding gap.
 const V6_BLOCKED = new BlockList();
 V6_BLOCKED.addSubnet('::', 96, 'ipv6'); // ::/96 = ::1, ::, and v4-compatible
 V6_BLOCKED.addSubnet('::ffff:0:0', 96, 'ipv6'); // v4-mapped
@@ -160,10 +155,8 @@ export interface CimdFetchOptions {
   ssrf?: SsrfDeps;
 }
 
-// Connection-level failures that a retry can legitimately recover from. A dead
-// IPv6 route (broken egress with Happy-Eyeballs falling through), a reset, or a
-// DNS blip are transient; an SSRF block, a bad HTTP status, or malformed JSON
-// are deterministic and must NOT be retried.
+// Connection-level failures a retry can recover from; an SSRF block, a bad
+// HTTP status, or malformed JSON are deterministic and must NOT be retried.
 const TRANSIENT_CODES = new Set([
   'ETIMEDOUT',
   'ECONNRESET',
@@ -183,8 +176,7 @@ export function isTransientFetchError(e: unknown): boolean {
   const cause = (e as { cause?: { code?: string } } | null)?.cause;
   const code = cause?.code ?? (e as { code?: string } | null)?.code;
   if (code && TRANSIENT_CODES.has(code)) return true;
-  // undici surfaces connection failures as TypeError('fetch failed') with the
-  // real reason in .cause; retry even when the cause carries no useful code.
+  // undici's TypeError('fetch failed') retries even with no useful .cause code.
   if (e instanceof TypeError && /fetch failed/i.test(e.message)) return true;
   return false;
 }
@@ -212,9 +204,8 @@ export async function fetchCimdDocument(rawUrl: string, opts: CimdFetchOptions =
   const doFetch = opts.fetchImpl ?? fetch;
   const sleep = opts.sleepImpl ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
-  // Retry fast transient failures IN PLACE. Each attempt re-runs the
-  // resolve-then-check so a retry can never skip the anti-rebind guard, and
-  // the timer is per-attempt (armed across the lookup and the body read, #10).
+  // Each attempt re-runs resolve-then-check so a retry can't skip the
+  // anti-rebind guard; the timer is per-attempt, armed across lookup and body read.
   for (let attempt = 0; ; attempt++) {
     const controller = new AbortController();
     let timedOut = false;
@@ -261,9 +252,8 @@ export async function fetchCimdDocument(rawUrl: string, opts: CimdFetchOptions =
   }
 }
 
-/** Read a response body, aborting the moment it exceeds maxBytes (never buffers
- * an oversized body). Falls back to a capped arrayBuffer when there is no
- * readable stream (e.g. a test Response). */
+// Aborts the moment maxBytes is exceeded (never buffers an oversized body);
+// falls back to a capped arrayBuffer when there's no readable stream (e.g. a test Response).
 async function readCapped(res: Response, maxBytes: number, controller: AbortController): Promise<string> {
   const reader = res.body?.getReader?.();
   if (!reader) {

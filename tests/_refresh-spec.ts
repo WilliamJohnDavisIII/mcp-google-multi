@@ -1,8 +1,5 @@
-// Independent spec code for the r1 refresh-token format (docs/internals.md,
-// "Refresh families count generations"). It never imports the store: a
-// format slip there disagrees with this file instead of agreeing with itself,
-// and a family at generation 5,000 is written directly instead of by 5,000
-// fsynced rotations.
+// Independent spec for the r1 token format (docs/internals.md); never imports token-store.js,
+// so a bug there disagrees with this file instead of itself, and high generations are seeded directly rather than rotated.
 import { createHash, createHmac, hkdfSync, randomBytes, scryptSync } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { decryptToken, deriveKey, encryptToken } from '../src/token-store.js';

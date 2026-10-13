@@ -2,9 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { ToolRegistry } from '../src/registry.js';
 
-// The wizard's transport seams. applyFileEntry is hard-mocked to THROW:
-// if any path under test reaches it over HTTP, the test fails loudly instead
-// of editing real client configs on the dev machine.
+// applyFileEntry is hard-mocked to THROW, so any path reaching it over HTTP
+// fails loudly instead of editing real client configs on the dev machine.
 vi.mock('../src/client-config.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../src/client-config.js')>();
   return {

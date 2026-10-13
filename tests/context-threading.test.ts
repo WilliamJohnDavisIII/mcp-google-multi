@@ -8,11 +8,8 @@ import { clearDiscoveryMemoryCache } from '../src/discovery-client.js';
 import type { AccountSet } from '../src/accounts.js';
 import type { ScopeProfile } from '../src/scope-catalog.js';
 
-// buildRegistry must resolve every handler through the context it is given.
-// tests/setup.ts seeds the GLOBAL registry with `test:test@example.com`, and
-// every context below reuses the alias `test`: wherever a handler fell back to
-// the process global it would surface test@example.com (or the global token
-// store), so each case fails against a registry that ignores its context.
+// buildRegistry must resolve every handler through the context it is given. tests/setup.ts seeds the
+// GLOBAL registry with the same alias `test`, so a handler that fell back to it would surface the wrong email/token, not silently pass.
 
 type Result = { content: { text: string }[]; isError?: boolean };
 type Handler = (args: Record<string, unknown>, extra?: unknown) => Promise<Result>;

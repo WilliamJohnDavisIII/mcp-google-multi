@@ -1,5 +1,4 @@
-// The RefreshStore of the release before generation-counted families
-// (dev after the own-key fix), vendored verbatim below the imports for the
+// The RefreshStore of the release before generation-counted families, vendored verbatim for the
 // downgrade round trip in tests/mcp-token.test.ts. Do not edit the class.
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -34,9 +33,9 @@ interface RefreshData {
 /**
  * Persisted (encrypted under MASTER_KEY) opaque refresh-token store. Rotates on
  * every use (a stolen token is usable at most once), and detects REUSE of a
- * rotated-away token as theft: the whole token family is revoked (#7).
+ * rotated-away token as theft: the whole token family is revoked.
  * All read-modify-write goes through a file lock so concurrent stdio+HTTP
- * processes can't lost-update or double-spend (#12).
+ * processes can't lost-update or double-spend.
  */
 export class RefreshStore {
   constructor(
@@ -63,11 +62,8 @@ export class RefreshStore {
   }
 
   private save(data: RefreshData): void {
-    // A family with no active token has nothing left to revoke. Over the cap,
-    // the subject holding the most spent tokens loses its oldest (ties: the
-    // oldest entry), so a subject's rotations, across all its families, only
-    // push out its own history (docs/internals.md). Insertion order = rotation
-    // order.
+    // A family with no active token has nothing left to revoke. Over the cap, the subject with the
+    // most spent tokens loses its oldest (insertion order = rotation order; ties go oldest); see docs/internals.md.
     const owner = new Map<string, string>();
     for (const r of Object.values(data.active)) owner.set(r.family, r.sub);
     const order = Object.keys(data.spent);

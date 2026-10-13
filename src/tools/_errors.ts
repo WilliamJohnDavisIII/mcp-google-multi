@@ -53,10 +53,8 @@ function headerOf(error: any, name: string): string | undefined {
   return key === undefined ? undefined : String((h as Record<string, unknown>)[key]);
 }
 
-/** gaxios hands `response.data` back as a STRING whenever it could not parse
- * JSON, and on every non-2xx of a responseType:'stream' call (drive_download,
- * drive_export), where it buffers the whole body to utf8 before throwing. So
- * the JSON error of a failed download is invisible to a plain property read. */
+// gaxios hands response.data back as a STRING whenever it can't parse JSON,
+// including every non-2xx of a responseType:'stream' call (drive_download/export).
 function errorPayload(error: any): any {
   const data = error?.response?.data;
   if (data && typeof data === 'object') return data;
@@ -74,9 +72,8 @@ function errorPayload(error: any): any {
 
 interface RpcErrorInfo { reason?: string; domain?: string; metadata?: Record<string, string> }
 
-/** AIP-193 google.rpc.ErrorInfo. Modern Workspace APIs (Chat, Meet, Workspace
- * Events, Analytics Data, People) put the machine-readable reason here and
- * leave errors[0].reason empty, which is why their 403s used to fall through. */
+// AIP-193 google.rpc.ErrorInfo: modern Workspace APIs put the machine-readable
+// reason here and leave errors[0].reason empty, which is why their 403s used to fall through.
 function errorInfoOf(payload: any): RpcErrorInfo | undefined {
   const details = payload?.error?.details;
   if (!Array.isArray(details)) return undefined;
@@ -103,10 +100,8 @@ function reasonOf(error: any, payload: any): string | undefined {
 const MARKUP_START_RE =
   /^\uFEFF?\s*(?:<!--|<!\s*doctype\b|<\?xml\b|<\/?(?:html|head|body|meta|title|style|script|h[1-6]|div|p|pre|center|table|font)\b)/i;
 
-/** True when error.message is a response BODY rather than an error sentence.
- * Content-Type first, shape second, markup sniff last, anchored at the start.
- * NEVER matches page TEXT: the same URL answers "Page introuvable" to a
- * French-locale account and "Page not found" to anonymous curl. */
+// True when error.message is a response BODY, not an error sentence; never
+// matches page TEXT (a localized "Page introuvable" must still pass through).
 function isRawBody(error: any, message: string): boolean {
   const ct = headerOf(error, 'content-type')?.toLowerCase();
   if (ct) return !ct.includes('json');
@@ -145,18 +140,16 @@ export function safeMessage(
   return isRawBody(error, raw) ? bodyPlaceholder(error, status, raw.length) : capMessage(raw);
 }
 
-// Connect/DNS syscall codes. ENOTFOUND (no such name) is the one non-transient
-// member. node-fetch flattens the happy-eyeballs AggregateError to a bare code
-// with an empty message, so the code is the only surviving signal to surface.
+// Connect/DNS syscall codes; ENOTFOUND is the one non-transient member. The
+// code is the only surviving signal once node-fetch flattens the AggregateError.
 const RETRIABLE_NET_CODES = new Set([
   'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ENETUNREACH',
   'EHOSTUNREACH', 'EPIPE', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET',
 ]);
 const NET_CODES = new Set([...RETRIABLE_NET_CODES, 'ENOTFOUND']);
 
-// Local-filesystem syscall codes from caller-supplied paths (localPath/savePath).
-// String codes, so they never collide with Google's numeric statuses; the
-// network codes above are deliberately excluded.
+// Local-filesystem syscall codes (never collide with Google's numeric
+// statuses); the network codes above are deliberately excluded.
 const LOCAL_FS_CODES = new Set(['ENOENT', 'EACCES', 'EISDIR', 'ENOTDIR', 'EPERM', 'ELOOP', 'ENAMETOOLONG', 'ENOSPC']);
 
 /** First known network code on the error or its cause chain (GaxiosError.cause
@@ -195,8 +188,7 @@ const FORBIDDEN_RATE_REASONS = new Set([
 ]);
 
 // Google already answered correctly: the file type is wrong for the tool, not
-// the permissions. The escape hatch has said this for years (executor.ts); the
-// curated pair used to discard it and blame sharing instead.
+// the permissions; the curated pair used to discard that and blame sharing instead.
 const WRONG_TOOL_HINTS: Record<string, string> = {
   fileNotDownloadable:
     'This is a Google Workspace native file (Doc, Sheet, Slides): it has no binary content to download. Use drive_export with a target mimeType such as application/pdf.',
@@ -238,9 +230,8 @@ function rateLimited(error: any, message: string, account: Account, reason?: str
   };
 }
 
-/** Prefer AIP metadata (service + consumer) over scraping the message: the
- * scrape stays as the fallback because Google's JSON error text is English
- * only, unlike its localized HTML pages. */
+// Prefer AIP metadata over scraping the message: the scrape stays as fallback
+// since Google's JSON error text is English only, unlike its localized HTML pages.
 function enableHint(info: RpcErrorInfo | undefined, message: string): string {
   const service = info?.metadata?.service;
   const project = info?.metadata?.consumer?.replace(/^projects\//, '');
@@ -267,9 +258,7 @@ export function mapGoogleError(
   const hints = normalizeHints(serviceHints);
 
   // 7-day Testing-mode trap: a BYO OAuth client in "Testing" status expires
-  // refresh tokens weekly; the dead token surfaces as invalid_grant. Name the
-  // real fix (publish to production) so the agent stops looping on re-auth.
-  // Checked before the generic 401 so it wins on either 400 or 401.
+  // refresh tokens weekly; checked before the generic 401 so it wins on either 400 or 401.
   const rawError = payload?.error;
   const grantHaystack = [message, reason, typeof rawError === 'string' ? rawError : '', payload?.error_description]
     .filter(Boolean)
@@ -320,9 +309,8 @@ export function mapGoogleError(
       return { error: 'api_not_enabled', message, hint: rendered?.hint ?? enableHint(info, message), retriable: false, account };
     }
 
-    // The scope hint fires ONLY on the machine-readable token. A coarse AIP
-    // status of PERMISSION_DENIED is equally true of a resource denial, and
-    // branching on it is what told callers to add a bundle they already had.
+    // Fires ONLY on the machine-readable token: a coarse PERMISSION_DENIED is
+    // equally true of a resource denial, and branching on it told callers to add a bundle they already had.
     const scopeIssue =
       reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' ||
       reason === 'insufficientPermissions' ||
@@ -391,9 +379,8 @@ export function mapGoogleError(
       account,
     };
   }
-  // A caller-side 4xx and a Google outage used to share `upstream_error`, so a
-  // consumer keying on the slug could not tell "your request is wrong, never
-  // retry" from "Google is having a bad minute, do retry".
+  // Used to share `upstream_error` with a 5xx, so a consumer keying on the
+  // slug couldn't tell "never retry" from "do retry".
   if (status !== undefined && status >= 400) {
     return {
       error: 'bad_request',
@@ -457,18 +444,14 @@ export function mapGoogleError(
           rendered?.hint ??
           (`Network failure (${netCode}) before reaching Google - not an auth or API problem. Usually transient: retry. ` +
             'If it persists on a high-latency or broken-IPv6 link, raise the happy-eyeballs budget: NODE_OPTIONS=--network-family-autoselection-attempt-timeout=4000 (server default 2000ms), and check connectivity with curl.'),
-        // Not an override site (scope_not_granted is the only kind whose
-        // retriable the host may flip): a multi-tenant host keeps core's
-        // retriable codes for network_error.
+        // Not an override site: a multi-tenant host keeps core's retriable codes for network_error.
         retriable: RETRIABLE_NET_CODES.has(netCode),
         account,
       };
     }
   }
-  // A gaxios-shaped error carries `response` or `config`, so the request left
-  // this process. Anything else threw INSIDE the server (a TypeError in a
-  // handler, a missing key), and calling that `upstream_error` blamed Google
-  // for our own bug: an empty messageId used to surface exactly that way.
+  // A gaxios-shaped error means the request left this process; anything else
+  // threw INSIDE the server, and calling that `upstream_error` blamed Google for our own bug.
   if (error?.response !== undefined || error?.config !== undefined) {
     return {
       error: 'upstream_error',

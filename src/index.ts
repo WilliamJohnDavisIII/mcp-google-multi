@@ -153,10 +153,8 @@ async function main() {
   const wantStdio = httpCfg.transport === 'stdio' || httpCfg.transport === 'both';
   const wantHttp = transportIncludesHttp(httpCfg.transport);
 
-  // The SERVER never boots with an empty registry — stdio always, HTTP
-  // when single-owner. The bootstrap and diagnostic CLIs above already
-  // returned. A multi-tenant boot instead refuses the two process-wide env
-  // vectors that would leak one operator's accounts/scopes into every tenant.
+  // The SERVER never boots with an empty registry (stdio always, HTTP when
+  // single-owner); a multi-tenant boot instead refuses the two process-wide env vectors.
   const mt = isMultiTenantBoot();
   if (accountsAssertRequired(wantStdio, mt)) assertServerAccountsConfigured();
   if (mt) {
@@ -169,9 +167,7 @@ async function main() {
   const { resolveMasterKey } = await import('./master-key.js');
   resolveMasterKey();
 
-  // Local usage metrics: fail-closed resolve, self-announcing source, null
-  // when off (no wrapper, no dir, nothing initializes). One instance per
-  // transport so `boots` keys stay honest under `both`.
+  // One Metrics instance per transport so `boots` keys stay honest under `both`.
   const envSrc = envValueSource('GOOGLE_USAGE_METRICS');
   const metricsState = resolveUsageMetrics(
     process.env,
@@ -213,11 +209,7 @@ async function main() {
     registry.installListHandler();
     registerSetupPrompt(server);
     const stdioHooks = requestHooksFor(registry, stdioCtx, stdioMetrics);
-    // Outbound runs outermost-first, so the composition is deliberate: the
-    // envelope rewrite is INNERMOST (last to touch the frame), the tap sits
-    // above it (classifying the ORIGINAL validation prose), arg normalization
-    // outermost. The tap only counts outbound JSON-RPC error frames (no
-    // handler ran) plus id->tool names.
+    // Composition order (outbound runs outermost-first): see docs/internals.md (Argument normalization).
     let transport: Transport = withValidationEnvelope(new StdioServerTransport(), stdioHooks.validationEnvelope);
     if (stdioMetrics) {
       const { tapUsageMetrics } = await import('./metrics-tap.js');
@@ -227,10 +219,8 @@ async function main() {
       stdioHooks.argShapeFor || stdioHooks.strictArgs
         ? withArgNormalization(
             transport,
-            // Gated exactly as the HTTP leg gates `argShapeFor`. Passing the
-            // shape unconditionally made stdio rename keys while
-            // GOOGLE_ARG_NORMALIZE=off, so the same call succeeded on stdio
-            // and failed on HTTP once screening rejects.
+            // Gated exactly as the HTTP leg gates argShapeFor, or GOOGLE_ARG_NORMALIZE=off
+            // would rename keys on stdio while HTTP's screening rejects the same call.
             stdioHooks.argShapeFor ?? (() => undefined),
             undefined,
             stdioMetrics ? (tool, n) => stdioMetrics.recordArgFix(tool, n) : undefined,
@@ -245,8 +235,7 @@ async function main() {
     const owners = parseOwnerEmails(process.env);
     const gates = mtBootGates();
     if (gates?.multiTenant) {
-      // Same fail-fast SHAPE, different condition: an ungated HTTP endpoint
-      // must never boot; under tenancy the gate is "a valid provisioning
+      // Same fail-fast shape as below, but the gate is "a valid provisioning
       // mechanism exists", not a flat owner allowlist.
       gates.assertProvisioningGate();
     } else {

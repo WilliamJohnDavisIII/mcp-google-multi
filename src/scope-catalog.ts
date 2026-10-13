@@ -1,7 +1,5 @@
-// The curated bundle catalog: ONE source of truth consumed by the wizard
-// picker, scope observability (#114) hints, and docs. Keys are a frozen
-// public API (config.json references them by name) — renames go through
-// BUNDLE_ALIASES, never in place.
+// The curated bundle catalog: ONE source of truth for the wizard, scope
+// observability, and docs. Keys are a frozen public API; rename via BUNDLE_ALIASES only.
 
 export interface ScopeProfile {
   includesBase?: boolean; // default true; false = advanced minimal-token escape hatch
@@ -133,9 +131,8 @@ export const BUNDLE_CATALOG: Record<string, BundleCatalogEntry> = {
     description: 'Read Google Analytics (GA4): run reports and inspect accounts, properties and their configuration.',
     risk: 'low',
   },
-  // Includes readonly so it is self-sufficient: analytics.edit alone does not
-  // authorize Data API reads. The smaller `analytics` bundle stays the hint
-  // target for read scopes (scope-observability sorts bundles by size).
+  // Includes readonly so it's self-sufficient: analytics.edit alone doesn't
+  // authorize Data API reads.
   analytics_write: {
     scopes: [
       'https://www.googleapis.com/auth/analytics.readonly',

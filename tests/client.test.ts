@@ -113,9 +113,8 @@ describe('createTokenStore (custody closures)', () => {
     storeB.writeToken('work', { refresh_token: 'rt-b' });
     expect(storeA.readToken('work')).toMatchObject({ refresh_token: 'rt-a' });
     expect(storeB.readToken('work')).toMatchObject({ refresh_token: 'rt-b' });
-    // simulate a mis-resolved path: B's file dropped into A's dir still cannot
-    // decrypt under A's subkey — custody isolation is cryptographic, not just
-    // directory layout
+    // simulate a mis-resolved path: B's file dropped into A's dir still can't decrypt under A's
+    // subkey; custody isolation is cryptographic, not just directory layout.
     fs.copyFileSync(path.join(dirB, 'work.enc'), path.join(dirA, 'work.enc'));
     expect(() => storeA.readToken('work')).toThrow();
   });

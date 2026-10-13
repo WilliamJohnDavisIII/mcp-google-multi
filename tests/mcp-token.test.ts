@@ -27,9 +27,8 @@ import { decryptToken, encryptToken } from '../src/token-store.js';
 import { RefreshStore as PrevRefreshStore } from './fixtures/refresh-store-prev.js';
 import { legacyTok, onDisk, r1Bytes, seedFamilies, seedLegacy, specKey, specMac, specTag, specToken } from './_refresh-spec.js';
 
-/** Change one character in the middle of a JWT's signature. Changing the last
- * ones can leave it intact: base64url decoding ignores the final character's
- * low bits, so about one run in a thousand would not tamper at all. */
+/** Change one character in the middle of a JWT's signature; changing the last one can leave it
+ * intact, since base64url ignores the final character's low bits (~1 run in 1,000 wouldn't tamper). */
 const tamperSig = (jwt: string): string => {
   const i = jwt.lastIndexOf('.') + 10;
   return jwt.slice(0, i) + (jwt[i] === 'A' ? 'B' : 'A') + jwt.slice(i + 1);
@@ -44,7 +43,7 @@ describe('MCP access token (HS256)', () => {
   it('round-trips with the right issuer + audience', async () => {
     const t = await signAccessToken({ base: BASE, secret, iat, sub: 'owner' });
     const claims = await verifyAccessToken(t, BASE, secret);
-    expect(claims.sub).toBe('owner'); // the explicitly passed sub, no longer hardcoded
+    expect(claims.sub).toBe('owner'); // sub is explicitly passed, not hardcoded in the signer
     expect(claims.scope).toBe('mcp:use');
   });
   it('rejects a wrong signing key', async () => {

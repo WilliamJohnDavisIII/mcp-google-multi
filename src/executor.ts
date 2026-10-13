@@ -134,10 +134,8 @@ export async function executeApiMethod(method: ApiMethodRef, args: ExecuteArgs, 
     });
     const text = JSON.stringify(res.data ?? null);
     if (text.length > MAX_RESPONSE_CHARS) {
-      // Budget the ENCODED head: jsonResult re-stringifies it, so every quote
-      // and backslash inside doubles. Slicing raw characters made the emitted
-      // result exceed the cap this tool advertises, by up to 15 percent on a
-      // quote-dense listing.
+      // Budget the ENCODED head: jsonResult re-stringifies it, so slicing raw
+      // characters overshot the advertised cap on a quote-dense listing.
       return jsonResult({
         truncated: true,
         totalChars: text.length,

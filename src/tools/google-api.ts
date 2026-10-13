@@ -214,9 +214,8 @@ export function registerEscapeTools(registry: ToolRegistry, policy: Policy, deps
       }
       let method = index.find((m) => m.id === methodId);
       if (!method) {
-        // Some discovery docs keep a legacy id prefix (the searchconsole doc's
-        // methods are webmasters.*): when the caller prefixed with our api
-        // alias, retry under the doc's own prefix before failing.
+        // Some discovery docs keep a legacy id prefix (searchconsole's methods are
+        // webmasters.*): retry under the doc's own prefix if the caller used our api alias.
         const docPrefix = index[0]?.id.split('.')[0];
         const [head, ...rest] = String(methodId).split('.');
         if (docPrefix && (head === apiKey || head === api) && head !== docPrefix && rest.length > 0) {
@@ -246,9 +245,8 @@ export function registerEscapeTools(registry: ToolRegistry, policy: Policy, deps
       const cud = cudFromMethod(method);
       const policyService = serviceForAlias(apiKey);
       const lastSegment = method.id.split('.').pop() ?? method.id;
-      // The escape hatch self-gates, so it needs the same scope signal the
-      // registry wrapper gets; without it a privileged method would slip past
-      // safe-writes here while its generated twin is refused.
+      // The escape hatch self-gates, so it needs the same scope signal as the registry
+      // wrapper, or a privileged method would slip past safe-writes here while its generated twin is refused.
       const toolRef = { name: `${policyService}_${lastSegment}`, service: policyService, cud, scopes: method.scopes };
       if (cud !== 'read' && !isAllowed(toolRef, policy)) {
         return writeDisabledResult(toolRef, policy, account as string);

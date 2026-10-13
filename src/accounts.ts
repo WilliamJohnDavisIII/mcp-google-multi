@@ -28,10 +28,8 @@ export interface AccountConfig {
 }
 
 export interface AccountSet {
-  // May be empty: a fresh install has zero accounts, and the bootstrap /
-  // diagnostic CLIs (doctor, reset, account import, migrate-config, config
-  // check) must run on it. The SERVER refuses to boot empty — see
-  // assertServerAccountsConfigured.
+  // May be empty: a fresh install has zero accounts, and the bootstrap/
+  // diagnostic CLIs must run on it; only the server refuses to boot empty.
   aliases: string[];
   configs: Record<string, AccountConfig>;
   scopeProfiles: Record<string, ScopeProfile>;
@@ -131,8 +129,7 @@ export function resolveAccounts(
   env: NodeJS.ProcessEnv = process.env,
   filePath = configFilePath(),
   onInvalid: 'exit' | 'throw' = 'exit',
-  // emptyOk: zero accounts is a valid set, not an error, even with 'throw'
-  // (a context that has linked nothing yet). An invalid file still fails.
+  // emptyOk: zero accounts is a valid set, not an error, even with 'throw'.
   opts: { tokenDir?: string; emptyOk?: boolean } = {},
 ): AccountSet {
   const dir = opts.tokenDir ?? tokenDir;
@@ -144,8 +141,7 @@ export function resolveAccounts(
     failStartup(slug, message);
   };
 
-  // Validate the legacy global override AT BOOT, whatever GOOGLE_TOOLSETS
-  // selects — otherwise a typo only surfaces at dispatch time inside
+  // Validate at BOOT, or a typo only surfaces at dispatch time inside
   // account_list instead of the promised startup error.
   const legacyNames = parseCsv(env.GOOGLE_OPTIONAL_SCOPES);
   if (legacyNames.length > 0) {
@@ -188,19 +184,13 @@ export function resolveAccounts(
     };
   }
 
-  // Stat BEFORE read: a cross-process write landing between the two makes the
-  // stamp conservative (flags stale again next dispatch) instead of pinning
-  // stale content behind a fresh stamp.
+  // Stat BEFORE read, so a race lands on the conservative (stale) side.
   const preStamp = fileStamp(filePath, CONFIG_VERSION);
   const config = loadConfigFile(filePath, onInvalid);
   const entries = Object.entries(config?.accounts ?? {});
   if (entries.length === 0) {
-    // Gap #23: an empty registry is NOT fatal at resolve time — the bootstrap and
-    // diagnostic CLIs (doctor/reset/account import/migrate-config/config check)
-    // must run on a fresh install. Only the stdio/http SERVER refuses to boot
-    // empty, enforced by assertServerAccountsConfigured() in index.ts.
-    // The dispatch-path reload ('throw') still throws so a mid-session emptied
-    // config.json keeps the last-good registry instead of dropping tools.
+    // Not fatal here: bootstrap/diagnostic CLIs must run on a fresh install;
+    // only the server refuses to boot empty (index.ts).
     if (onInvalid === 'throw' && !opts.emptyOk) {
       throw new Error(`E_NO_ACCOUNTS_CONFIGURED: ${noAccountsMessage()}`);
     }
@@ -213,9 +203,8 @@ export function resolveAccounts(
     };
   }
 
-  // Unknown bundle names fail loudly (a mis-scoped token is worse than a
-  // clear error); v5 silently filtered them. Null prototype: profile names are
-  // user input and must never collide with Object.prototype members.
+  // Unknown bundle names fail loudly (a mis-scoped token is worse than a clear
+  // error). Null prototype: profile names are user input, must never collide with Object.prototype.
   const scopeProfiles: Record<string, ScopeProfile> = Object.create(null);
   scopeProfiles.base = { bundles: [] };
   for (const [name, profile] of Object.entries(config?.scopeProfiles ?? {})) {
@@ -268,9 +257,8 @@ export function resolveAccounts(
   };
 }
 
-/** env GOOGLE_DEFAULT_ACCOUNT > config.defaultAccount > unset. A configured
- * default naming an unknown alias refuses to start (E_DEFAULT_ACCOUNT_UNKNOWN —
- * deliberately NOT E_CONFIG_INVALID: the config is schema-valid). */
+// env GOOGLE_DEFAULT_ACCOUNT > config.defaultAccount > unset; an unknown alias
+// refuses to start as E_DEFAULT_ACCOUNT_UNKNOWN, not E_CONFIG_INVALID (the config is schema-valid).
 function resolveDefaultAccount(
   env: NodeJS.ProcessEnv,
   fromConfig: string | null,
@@ -297,9 +285,8 @@ export function fileStamp(filePath: string, version: number): string {
   }
 }
 
-// First-run shim: env is set and no config.json exists yet — materialize
-// the file so the wizard has something to edit. Env still wins this session;
-// a write failure must never block boot (warn on stderr and continue).
+// env is set and no config.json exists yet: materialize the file so the
+// wizard has something to edit; a write failure must never block boot.
 function materializeFirstRun(
   aliases: string[],
   configs: Record<string, AccountConfig>,
@@ -308,9 +295,7 @@ function materializeFirstRun(
   if (fs.existsSync(filePath)) return;
   try {
     let wrote = false;
-    // mutateConfigFile = lock + re-check + atomic write, so a concurrent
-    // wizard/migrate writer is never clobbered (the loaded `current` is
-    // re-read under the lock; only a still-absent file gets the env content).
+    // lock + re-check + atomic write, so a concurrent wizard/migrate writer is never clobbered.
     mutateConfigFile((current) => {
       if (Object.keys(current.accounts ?? {}).length > 0) return current;
       const accounts: NonNullable<ConfigFile['accounts']> = {};

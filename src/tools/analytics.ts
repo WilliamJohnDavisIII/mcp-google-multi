@@ -114,9 +114,8 @@ const propertySchema = z
   );
 
 export function registerAnalyticsTools(server: ToolRegistry, deps: CuratedToolDeps = {}): void {
-  // Per-registry, LIVE account enum + injectable client: the
-  // schema follows the registry's account view at parse time, and the
-  // custody path is the context's, not the process global.
+  // Per-registry, live account enum + injectable client: the schema follows
+  // the registry's account view at parse time, not a process-global default.
   const accountEnum = accountArgLive(() => server.accountAliases()).optional();
   const getClientFn = deps.getClientFn ?? getClient;
   server.registerTool(
@@ -302,8 +301,8 @@ export function handleAnalyticsError(error: any, account: Account) {
     account,
     {
       scope: 'Needs the "analytics" bundle on this account: add it to the scope profile, then re-auth.',
-      // GA4 answers PERMISSION_DENIED for a property ACL too, and the old
-      // combined hint sent those callers to re-auth a scope they already had.
+      // GA4 returns PERMISSION_DENIED for a property-access issue too, not just
+      // a missing scope; keep the hints distinct, or callers get sent to re-auth a scope they already have.
       resource: 'The scope is not the problem: this Google account has no access to that GA4 property. Grant it in GA4 Admin > Property Access Management, or call analytics_account_summaries to see the properties it can read.',
       bundle: 'analytics',
     },

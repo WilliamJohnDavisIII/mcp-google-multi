@@ -9,10 +9,8 @@ import type { Metrics } from '../src/usage-metrics.js';
 
 afterEach(() => setHintProvider(null));
 
-// Containment (the #162 shape): a '*' selector against a registry built
-// with one alias set must never enumerate another registry's (or the global)
-// alias set. Red-first: against the accessor-less registry this fans out over
-// the GLOBAL account set instead of the registry's own.
+// Containment: a '*' selector against a registry built with one alias set must never enumerate another
+// registry's (or the global) alias set; the accessor-less registry once fanned out over the GLOBAL set instead.
 
 const POLICY: Policy = { profile: 'read-only', readOnly: true, allow: [], deny: [] };
 
