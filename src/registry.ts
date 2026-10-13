@@ -69,9 +69,37 @@ export interface CatalogOperation {
 }
 
 /** The leading sentence of a (possibly multi-sentence) tool description. */
-function firstSentence(text: string): string {
-  const idx = text.indexOf('. ');
-  return idx === -1 ? text : text.slice(0, idx + 1);
+export function firstSentence(text: string): string {
+  let openParens = 0;
+  let i = 0;
+  const abbrevs = /^(e\.g|i\.e|etc|vs)\.$/i;
+
+  while (i < text.length) {
+    const char = text[i];
+
+    if (char === '(') {
+      openParens++;
+    } else if (char === ')') {
+      openParens = Math.max(0, openParens - 1);
+    } else if (char === '.' && i + 1 < text.length && text[i + 1] === ' ' && openParens === 0) {
+      // Found a period-space outside parentheses
+      // Check if it's preceded by an abbreviation (e.g., i.e., etc, vs)
+      // Find the word before this period
+      let wordStart = i - 1;
+      while (wordStart > 0 && /[a-zA-Z.]/.test(text[wordStart - 1])) {
+        wordStart--;
+      }
+      const word = text.slice(wordStart, i + 1);
+
+      if (!abbrevs.test(word)) {
+        // Not an abbreviation, so this is a valid sentence boundary
+        return text.slice(0, i + 1);
+      }
+    }
+    i++;
+  }
+
+  return text;
 }
 
 interface ToolConfig {
