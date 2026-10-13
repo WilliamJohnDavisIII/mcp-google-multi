@@ -34,7 +34,7 @@ interface RefreshData {
 /**
  * Persisted (encrypted under MASTER_KEY) opaque refresh-token store. Rotates on
  * every use (a stolen token is usable at most once), and detects REUSE of a
- * rotated-away token as theft: the whole token family is revoked (#7 / C14).
+ * rotated-away token as theft: the whole token family is revoked (#7).
  * All read-modify-write goes through a file lock so concurrent stdio+HTTP
  * processes can't lost-update or double-spend (#12).
  */

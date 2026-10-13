@@ -104,7 +104,7 @@ describe('withDefaultAccount injection matrix (single dispatch site)', () => {
     expect((res as { isError: boolean }).isError).toBe(true);
   });
 
-  it('a hint provider renders no_default_account with the registry aliases (H3)', async () => {
+  it('a hint provider renders no_default_account with the registry aliases', async () => {
     const seen: unknown[] = [];
     setHintProvider({
       render: (c) => {

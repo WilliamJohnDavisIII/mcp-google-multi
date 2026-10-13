@@ -15,7 +15,7 @@ import {
 const dnsLookup = vi.hoisted(() => vi.fn());
 vi.mock('node:dns/promises', () => ({ lookup: dnsLookup }));
 
-describe('private-range detection (C11)', () => {
+describe('private-range detection', () => {
   it('blocks IPv4 private / loopback / link-local / metadata / multicast', () => {
     for (const ip of ['0.0.0.0', '10.1.2.3', '127.0.0.1', '169.254.169.254', '172.16.0.1', '172.31.255.255', '192.168.1.1', '100.64.0.1', '224.0.0.1', '240.0.0.1']) {
       expect(isBlockedIPv4(ip)).toBe(true);

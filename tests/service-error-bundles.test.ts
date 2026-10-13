@@ -26,10 +26,10 @@ function echo() {
   return seen;
 }
 
-// H3 PR1: every curated gated-service 403 text is unchanged with no provider
+// Every curated gated-service 403 text is unchanged with no provider
 // (case A — these assertions pass against today's literals), and carries the
 // right bundle fact to a provider (case B — scope_unknown.bundle).
-describe('curated gated-service scope hints carry their bundle (H3)', () => {
+describe('curated gated-service scope hints carry their bundle', () => {
   it('forms: unchanged text with no provider; bundle "forms" with one', () => {
     const e = handleFormsError(SCOPE_403, acc);
     expect(JSON.parse(e.content[0].text).hint).toContain('"forms" scope bundle');

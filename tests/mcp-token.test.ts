@@ -110,7 +110,7 @@ describe('signed state + authz code', () => {
   });
 });
 
-describe('ReplayGuard (C10/C17)', () => {
+describe('ReplayGuard', () => {
   it('accepts a jti once, rejects the replay', () => {
     const g = new ReplayGuard();
     expect(g.consume('j1', 1000, 0)).toBe(true);
@@ -126,7 +126,7 @@ describe('ReplayGuard (C10/C17)', () => {
     for (let i = 0; i < 10; i++) g.consume(`j${i}`, 100_000, 0);
     expect(g.size).toBeLessThanOrEqual(3);
   });
-  it('refuses rather than forgets a live jti when full (H4 F1)', () => {
+  it('refuses rather than forgets a live jti when full', () => {
     const g = new ReplayGuard(2);
     expect(g.spend('a', 1000, 0)).toBe('ok');
     expect(g.spend('b', 1000, 0)).toBe('ok');
@@ -170,7 +170,7 @@ describe('ReplayGuard (C10/C17)', () => {
   });
 });
 
-describe('RefreshStore (C14 rotation)', () => {
+describe('RefreshStore rotation', () => {
   let dir: string;
   afterEach(() => dir && rmSync(dir, { recursive: true, force: true }));
   const store = () => {
@@ -202,7 +202,7 @@ describe('RefreshStore (C14 rotation)', () => {
     expect(s.rotate('never-issued', 1000)).toBeNull();
   });
 
-  it('carries an arbitrary sub end to end and copies it forward on every rotation (S1.3)', () => {
+  it('carries an arbitrary sub end to end and copies it forward on every rotation', () => {
     const s = store();
     const t1 = s.issue(1000, 'tenant-a');
     const r1 = s.rotate(t1, 2000);
@@ -323,7 +323,7 @@ describe('RefreshStore file format', () => {
   });
 });
 
-describe('RefreshStore generations (F2)', () => {
+describe('RefreshStore generations', () => {
   const KEY = 'master-key-for-test';
   let dir: string;
   afterEach(() => dir && rmSync(dir, { recursive: true, force: true }));
@@ -341,7 +341,7 @@ describe('RefreshStore generations (F2)', () => {
   };
   const fidOf = (token: string) => r1Bytes(token).subarray(0, 16);
 
-  it('G0 known answer: key derivation, byte order and MAC input are pinned', () => {
+  it('known answer: key derivation, byte order and MAC input are pinned', () => {
     const MK = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
     const TOKEN = 'r1.EBESExQVFhcYGRobHB0eHwECAwSgoaKjpKWmp6ipqqusra6vae0HPY7R1kpwyrnP9flryVjpAG54fFMHUKGK8Sgywi0';
     expect(specKey(MK).toString('hex')).toBe('055e29c4600133162eabbd2f74bd5b34623da9509bcfb5cbbe7446f3ffd21891');
@@ -360,7 +360,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(onDisk(file, MK).families[spec.fid]).toMatchObject({ gen: 0x01020305, cur: createHash('sha256').update(next).digest('base64url') });
   });
 
-  it('G0b a passphrase MASTER_KEY reaches the MAC key through scrypt, not one hash', () => {
+  it('a passphrase MASTER_KEY reaches the MAC key through scrypt, not one hash', () => {
     expect(specKey(KEY).toString('hex')).toBe('59ba1aac916a4f7289406e9bc6ecd9912b6520a68b9196e51c02a352ad673f3f');
     const { s, file } = storeAt();
     const t = s.issue(1000, 'owner');
@@ -374,7 +374,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(onDisk(file, KEY).families[fidOf(t).toString('base64url')]).toMatchObject({ gen: 0 });
   });
 
-  it('G1 fifty rotations leave one family record and no rotated-away tokens', () => {
+  it('fifty rotations leave one family record and no rotated-away tokens', () => {
     const { s, file } = storeAt();
     const t = chain(s, s.issue(1000, 'owner'), 1);
     const afterOne = readFileSync(file, 'utf-8').length;
@@ -386,7 +386,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(Math.abs(readFileSync(file, 'utf-8').length - afterOne)).toBeLessThanOrEqual(4);
   });
 
-  it('G2 any rotated-away generation revokes the family, not just the previous one', () => {
+  it('any rotated-away generation revokes the family, not just the previous one', () => {
     let { s, file } = storeAt();
     let t = chain(s, s.issue(1000, 'owner'), 5);
     expect(s.rotate(t[2], 9000)).toBeNull();
@@ -400,7 +400,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(onDisk(file, KEY).families).toEqual({});
   });
 
-  it('G3 a token 4,997 generations old still revokes; the current one at 5,000 rotates', () => {
+  it('a token 4,997 generations old still revokes; the current one at 5,000 rotates', () => {
     const { s, file, logs } = storeAt();
     const fid = randomBytes(16);
     const cur = specToken(KEY, fid, 5000);
@@ -415,7 +415,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(r1Bytes(r!.token).readUInt32BE(16)).toBe(5001);
   });
 
-  it('G4 a flipped MAC byte is refused and the real token still rotates', () => {
+  it('a flipped MAC byte is refused and the real token still rotates', () => {
     const { s } = storeAt();
     const t = s.issue(1000, 'owner');
     const b = r1Bytes(t);
@@ -424,7 +424,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(s.rotate(t, 2001)!.sub).toBe('owner');
   });
 
-  it('G5 a forged older generation (random MAC) revokes nothing', () => {
+  it('a forged older generation (random MAC) revokes nothing', () => {
     const { s, file } = storeAt();
     const t = chain(s, s.issue(1000, 'owner'), 1);
     const forged = specToken(KEY, fidOf(t[1]), 0, { mac: randomBytes(32) });
@@ -434,7 +434,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(s.rotate(t[1], 3001)!.sub).toBe('owner');
   });
 
-  it('G6 the current token with its random part altered and the original MAC is refused', () => {
+  it('the current token with its random part altered and the original MAC is refused', () => {
     const { s } = storeAt();
     const t = s.issue(1000, 'owner');
     const b = r1Bytes(t);
@@ -443,7 +443,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(s.rotate(t, 2001)!.sub).toBe('owner');
   });
 
-  it('G7 a token minted under another master key names nothing', () => {
+  it('a token minted under another master key names nothing', () => {
     const { s } = storeAt();
     const t = chain(s, s.issue(1000, 'owner'), 1);
     expect(s.rotate(specToken('another-master-key', fidOf(t[1]), 0).token, 3000)).toBeNull();
@@ -451,7 +451,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(s.rotate(t[1], 3002)!.sub).toBe('owner');
   });
 
-  it('G8 an issued token is r1 and the file holds neither it nor its body', () => {
+  it('an issued token is r1 and the file holds neither it nor its body', () => {
     const { s, file } = storeAt();
     const t = s.issue(1000, 'owner');
     expect(t).toMatch(/^r1\.[A-Za-z0-9_-]{91}$/);
@@ -461,7 +461,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(json).not.toContain(r1Bytes(t).subarray(20, 36).toString('base64url'));
   });
 
-  it('G9 one spelling per token: a re-spelled, shortened, lengthened or junk token is refused', () => {
+  it('one spelling per token: a re-spelled, shortened, lengthened or junk token is refused', () => {
     const { s } = storeAt();
     const t = s.issue(1000, 'owner');
     const ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -471,7 +471,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(s.rotate(t, 2001)!.sub).toBe('owner');
   });
 
-  it('G10 a family at the last generation is dropped instead of throwing', () => {
+  it('a family at the last generation is dropped instead of throwing', () => {
     const { s, file, logs } = storeAt();
     const fid = randomBytes(16);
     const cur = specToken(KEY, fid, 0xffffffff);
@@ -481,7 +481,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(logs).toEqual([`refresh family dropped: overflow tag=${specTag(fid)}`]);
   });
 
-  it('G11 a reuse revokes its own family only: same-subject and other-subject families keep rotating', () => {
+  it('a reuse revokes its own family only: same-subject and other-subject families keep rotating', () => {
     const { s } = storeAt();
     const a = chain(s, s.issue(1000, 'tenant-a'), 1);
     const b = s.issue(1000, 'tenant-a');
@@ -492,7 +492,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(s.rotate(c, 3003)!.sub).toBe('tenant-b');
   });
 
-  it('G12 a newer generation or a same-generation twin drops the family and says so, not theft', () => {
+  it('a newer generation or a same-generation twin drops the family and says so, not theft', () => {
     const { s, file, logs } = storeAt();
     const fid = randomBytes(16);
     const cur = specToken(KEY, fid, 5);
@@ -507,7 +507,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(logs).toEqual([`refresh family dropped: ahead tag=${specTag(fid)}`, `refresh family dropped: mismatch tag=${specTag(fid)}`]);
   });
 
-  it('G13 a token that does not decode to exactly 68 bytes is refused without throwing', () => {
+  it('a token that does not decode to exactly 68 bytes is refused without throwing', () => {
     const { s } = storeAt();
     const t = s.issue(1000, 'owner');
     const body = t.slice(3);
@@ -517,7 +517,7 @@ describe('RefreshStore generations (F2)', () => {
     expect(s.rotate(t, 2001)!.sub).toBe('owner');
   });
 
-  it('V1 a malformed family record is dropped on load and a good one keeps rotating', () => {
+  it('a malformed family record is dropped on load and a good one keeps rotating', () => {
     const { s, file } = storeAt();
     const good = specToken(KEY, randomBytes(16), 0);
     const any = () => specToken(KEY, randomBytes(16), 0);
@@ -555,7 +555,7 @@ describe('RefreshStore earlier-release records', () => {
   };
   const [L0, L1] = [legacyTok('L0'), legacyTok('L1')];
 
-  it('M1 a live earlier-release token rotates once into a new family that keeps its evidence', () => {
+  it('a live earlier-release token rotates once into a new family that keeps its evidence', () => {
     const { s, file } = storeAt();
     seedLegacy(file, KEY, { [L1]: { sub: 'owner', issuedAt: 1000, family: 'fam-a' } }, { [L0]: 'fam-a' });
     const r = s.rotate(L1, 2000);
@@ -570,7 +570,7 @@ describe('RefreshStore earlier-release records', () => {
     expect(onDisk(file, KEY).spent).toEqual({ [L0]: 'fam-a', [L1]: 'fam-a' });
   });
 
-  it('M2 an earlier-release rotated-away token revokes the family it migrated into', () => {
+  it('an earlier-release rotated-away token revokes the family it migrated into', () => {
     for (const reused of [L0, L1]) {
       const { s, file, logs } = storeAt();
       seedLegacy(file, KEY, { [L1]: { sub: 'owner', issuedAt: 1000, family: 'fam-a' } }, { [L0]: 'fam-a' });
@@ -584,7 +584,7 @@ describe('RefreshStore earlier-release records', () => {
     }
   });
 
-  it('M3 nothing is evicted: the oldest of 2,001 earlier-release tokens still revokes after 20 new rotations', () => {
+  it('nothing is evicted: the oldest of 2,001 earlier-release tokens still revokes after 20 new rotations', () => {
     const { s, file } = storeAt();
     const spent: Record<string, string> = {};
     for (let i = 0; i < 2000; i++) spent[legacyTok(`s${i}`)] = 'fam-a';
@@ -596,7 +596,7 @@ describe('RefreshStore earlier-release records', () => {
     expect(s.rotate(t, 9001)).toBeNull();
   });
 
-  it('M5 accept false on an earlier-release token drops every session of that subject in both formats', () => {
+  it('accept false on an earlier-release token drops every session of that subject in both formats', () => {
     const { s, file } = storeAt();
     const [La, Lb] = [legacyTok('La'), legacyTok('Lb')];
     seedLegacy(file, KEY, { [La]: { sub: 'tenant-a', issuedAt: 1000, family: 'fam-a' }, [Lb]: { sub: 'tenant-b', issuedAt: 1000, family: 'fam-b' } }, { [L0]: 'fam-a' });
@@ -610,7 +610,7 @@ describe('RefreshStore earlier-release records', () => {
     expect(s.rotate(Lb, 3001, () => true)!.sub).toBe('tenant-b');
   });
 
-  it('M6 purgeTenant counts and drops sessions in both formats and their evidence', () => {
+  it('purgeTenant counts and drops sessions in both formats and their evidence', () => {
     const { s, file } = storeAt();
     seedLegacy(file, KEY, { [L1]: { sub: 'tenant-a', issuedAt: 1000, family: 'fam-a' } }, { [L0]: 'fam-a' });
     s.issue(1500, 'tenant-a');
@@ -624,7 +624,7 @@ describe('RefreshStore earlier-release records', () => {
     expect(s.rotate(b, 2000)!.sub).toBe('tenant-b');
   });
 
-  it('M9 round trip with the previous release: it refuses new tokens, and its file loads back', () => {
+  it('round trip with the previous release: it refuses new tokens, and its file loads back', () => {
     const { file } = storeAt();
     const next = new RefreshStore(file, KEY);
     const a = next.rotate(next.issue(1000, 'tenant-a'), 2000)!.token;
@@ -651,7 +651,7 @@ describe('RefreshStore earlier-release records', () => {
   });
 });
 
-describe('RefreshStore lifetimes (ruling 10)', () => {
+describe('RefreshStore lifetimes', () => {
   const KEY = 'master-key-for-test';
   let dir: string;
   afterEach(() => dir && rmSync(dir, { recursive: true, force: true }));
@@ -664,7 +664,7 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
   const subsOnDisk = (file: string) => Object.values(onDisk(file, KEY).families).map((f) => f.sub).sort();
   const unknownFamily = () => specToken(KEY, randomBytes(16), 0).token;
 
-  it('L1 maxAgeSec ends a family that long after its sign-in, however often it rotates', () => {
+  it('maxAgeSec ends a family that long after its sign-in, however often it rotates', () => {
     const { s, file } = storeAt({ maxAgeSec: 100 });
     let t = s.issue(0, 'owner');
     t = s.rotate(t, 50_000)!.token;
@@ -673,7 +673,7 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
     expect(onDisk(file, KEY).families).toEqual({});
   });
 
-  it('L2 idleSec ends a family that long after its last rotation', () => {
+  it('idleSec ends a family that long after its last rotation', () => {
     const { s, file } = storeAt({ idleSec: 10 });
     let t = s.issue(0, 'owner');
     t = s.rotate(t, 9_999)!.token;
@@ -682,13 +682,13 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
     expect(onDisk(file, KEY).families).toEqual({});
   });
 
-  it('L3 without options a family never expires', () => {
+  it('without options a family never expires', () => {
     const { s } = storeAt();
     const t = s.issue(0, 'owner');
     expect(s.rotate(t, 10 * 365 * 86_400_000)!.sub).toBe('owner');
   });
 
-  it('L4 every issue and rotation drops the expired families of every subject', () => {
+  it('every issue and rotation drops the expired families of every subject', () => {
     const { s, file } = storeAt({ idleSec: 10 });
     s.issue(0, 'a');
     const b = s.issue(0, 'b');
@@ -698,7 +698,7 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
     expect(subsOnDisk(file)).toEqual(['b', 'd']);
   });
 
-  it('L5 a refused token writes only when the prune found work', () => {
+  it('a refused token writes only when the prune found work', () => {
     const { s, file } = storeAt({ idleSec: 10 });
     s.issue(0, 'a');
     s.issue(0, 'b');
@@ -712,7 +712,7 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
     expect(readFileSync(file).equals(pruned)).toBe(true);
   });
 
-  it('L6 an expired family is refused without consulting accept', () => {
+  it('an expired family is refused without consulting accept', () => {
     const { s } = storeAt({ idleSec: 10 });
     const t = s.issue(0, 'owner');
     const accept = vi.fn(() => true);
@@ -720,7 +720,7 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
     expect(accept).not.toHaveBeenCalled();
   });
 
-  it('L7 a throwing accept writes and logs nothing, not even the prune; the retry logs the expiry once', () => {
+  it('a throwing accept writes and logs nothing, not even the prune; the retry logs the expiry once', () => {
     const { s, file, logs } = storeAt({ idleSec: 10 });
     s.issue(0, 'x');
     const y = s.issue(8_000, 'y');
@@ -736,7 +736,7 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
     expect(logs).toEqual(['refresh families expired n=1']);
   });
 
-  it('L8 a lifetime that is not a positive whole number throws', () => {
+  it('a lifetime that is not a positive whole number throws', () => {
     for (const name of ['maxAgeSec', 'idleSec', 'maxFamiliesPerSub'] as const) {
       for (const bad of [0, -1, 1.5, NaN, Infinity, '10']) {
         expect(() => new RefreshStore('/unused', KEY, { [name]: bad as number }), `${name}=${String(bad)}`).toThrow(`E_REFRESH_OPTION_INVALID: ${name} must be a positive whole number`);
@@ -744,14 +744,14 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
     }
   });
 
-  it('L9 an idle limit longer than the absolute one is allowed and the absolute one still fires', () => {
+  it('an idle limit longer than the absolute one is allowed and the absolute one still fires', () => {
     const { s } = storeAt({ maxAgeSec: 100, idleSec: 1000 });
     let t = s.issue(0, 'owner');
     t = s.rotate(t, 50_000)!.token;
     expect(s.rotate(t, 100_000)).toBeNull();
   });
 
-  it('T1 the last-use time never moves backwards', () => {
+  it('the last-use time never moves backwards', () => {
     const { s, file } = storeAt({ idleSec: 100 });
     let t = s.issue(0, 'owner');
     t = s.rotate(t, 10_000)!.token;
@@ -759,7 +759,7 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
     expect(Object.values(onDisk(file, KEY).families)[0].usedAt).toBe(10_000);
   });
 
-  it('T2 a time written while the clock ran ahead is pulled back, so the limit counts from the clock', () => {
+  it('a time written while the clock ran ahead is pulled back, so the limit counts from the clock', () => {
     const { s, file, logs } = storeAt({ maxAgeSec: 100 });
     const t0 = 1_000_000_000;
     const ahead = specToken(KEY, randomBytes(16), 0);
@@ -770,7 +770,7 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
     expect(s.rotate(ahead.token, t0 + 100_000)).toBeNull();
   });
 
-  it('T3 a prune that empties the store says the clock may be wrong', () => {
+  it('a prune that empties the store says the clock may be wrong', () => {
     let { s, logs } = storeAt({ idleSec: 10 });
     s.issue(0, 'a');
     s.issue(0, 'b');
@@ -784,7 +784,7 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
     expect(logs).toEqual(['refresh families expired n=1']);
   });
 
-  it('M4 earlier-release sessions expire too, and a migrated one keeps its original sign-in time', () => {
+  it('earlier-release sessions expire too, and a migrated one keeps its original sign-in time', () => {
     let { s, file } = storeAt({ idleSec: 10 });
     const [L0, L1] = [legacyTok('L0'), legacyTok('L1')];
     seedLegacy(file, KEY, { [L1]: { sub: 'owner', issuedAt: 1000, family: 'fam-a' } }, { [L0]: 'fam-a' });
@@ -799,7 +799,7 @@ describe('RefreshStore lifetimes (ruling 10)', () => {
   });
 });
 
-describe('RefreshStore session cap (F11)', () => {
+describe('RefreshStore session cap', () => {
   const KEY = 'master-key-for-test';
   let dir: string;
   afterEach(() => dir && rmSync(dir, { recursive: true, force: true }));
@@ -810,7 +810,7 @@ describe('RefreshStore session cap (F11)', () => {
     return { s: new RefreshStore(file, KEY, { log: (l) => logs.push(l), ...options }), file, logs };
   };
 
-  it("C1 the cap+1th issue for one subject drops its least recently used family and leaves its other families and every other subject's families working", () => {
+  it("the cap+1th issue for one subject drops its least recently used family and leaves its other families and every other subject's families working", () => {
     const { s, logs } = storeAt({ maxFamiliesPerSub: 2 });
     const a1 = s.issue(0, 'a');
     const a2 = s.issue(1000, 'a');
@@ -823,7 +823,7 @@ describe('RefreshStore session cap (F11)', () => {
     expect(logs.some((l) => l.startsWith('refresh family dropped: cap'))).toBe(true);
   });
 
-  it('C2 legacy active records of that subject count toward the cap', () => {
+  it('legacy active records of that subject count toward the cap', () => {
     const { s, file } = storeAt({ maxFamiliesPerSub: 2 });
     const legacy = legacyTok('cap-legacy');
     seedLegacy(file, KEY, { [legacy]: { sub: 'a', issuedAt: 100, family: 'fam-a' } });
@@ -893,7 +893,7 @@ describe('RefreshStore pre-auth cost', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => (clock += 500));
   };
 
-  it('P1 a malformed or forged token is refused without taking the lock or touching the directory', () => {
+  it('a malformed or forged token is refused without taking the lock or touching the directory', () => {
     const { s, file } = storeAt();
     const t = s.issue(1000, 'owner');
     const forged = specToken(KEY, r1Bytes(t).subarray(0, 16), 0, { mac: randomBytes(32) }).token;
@@ -910,7 +910,7 @@ describe('RefreshStore pre-auth cost', () => {
     });
   });
 
-  it('P2 an earlier-release-shaped token skips the lock once the store holds no earlier-release record', () => {
+  it('an earlier-release-shaped token skips the lock once the store holds no earlier-release record', () => {
     const { s, file } = storeAt();
     s.issue(1000, 'owner');
     fastClock();
@@ -924,7 +924,7 @@ describe('RefreshStore pre-auth cost', () => {
     expect(() => withFileLock(other.file, () => other.s.rotate(legacyTok('junk'), 2000))).toThrow(/Timed out/);
   });
 
-  it('P4 a failed read does not turn on the pre-lock refusal', () => {
+  it('a failed read does not turn on the pre-lock refusal', () => {
     const { s, file } = storeAt();
     const L1 = legacyTok('L1');
     seedLegacy(file, KEY, { [L1]: { sub: 'owner', issuedAt: 1000, family: 'fam-a' } });
@@ -935,7 +935,7 @@ describe('RefreshStore pre-auth cost', () => {
     expect(s.rotate(L1, 2000)?.sub).toBe('owner');
   });
 
-  it('P3 refreshFamilyTagger tags a family the same at every generation and nothing else', () => {
+  it('refreshFamilyTagger tags a family the same at every generation and nothing else', () => {
     const { s } = storeAt();
     const tag = refreshFamilyTagger(KEY);
     const a0 = s.issue(1000, 'owner');

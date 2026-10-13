@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const manifest = JSON.parse(readFileSync(path.join(root, 'manifest.json'), 'utf-8'));
 
-describe('MCPB manifest (B18)', () => {
+describe('MCPB manifest', () => {
   it('declares manifest_version 0.3 and the required top-level fields', () => {
     expect(manifest.manifest_version).toBe('0.3');
     for (const key of ['name', 'version', 'description', 'author', 'server']) {

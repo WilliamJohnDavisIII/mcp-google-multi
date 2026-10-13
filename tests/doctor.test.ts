@@ -50,7 +50,7 @@ describe('maskEmails via renderReport (linear scan)', () => {
   });
 });
 
-describe('tenant-scoped diagnose (S1.21)', () => {
+describe('tenant-scoped diagnose', () => {
   const httpEnv = { MCP_TRANSPORT: 'http', MCP_PUBLIC_URL: 'https://mcp.example.com', MCP_OWNER_EMAILS: 'operator-private@x.example' };
 
   it('operator default includes sections 3 and 7 (byte-identical to today)', async () => {

@@ -7,7 +7,7 @@ afterEach(() => {
   setHintProvider(null);
 });
 
-describe('reauthHint (BV-1)', () => {
+describe('reauthHint', () => {
   it('defaults to the stdio auth CLI', () => {
     setHttpReauthLink(null);
     expect(reauthHint('personal')).toBe('Run: npx mcp-google-multi auth --account personal');
@@ -22,7 +22,7 @@ describe('reauthHint (BV-1)', () => {
     expect(asked).toEqual(['a b']);
   });
 
-  // H3 PR1: a host-installed provider wins over BOTH the linker and the CLI
+  // A host-installed provider wins over BOTH the linker and the CLI
   // default, so a multi-tenant host never needs core's linker to speak
   // in-band over HTTP.
   it('a host-installed hint provider wins over the linker and the CLI default', () => {
