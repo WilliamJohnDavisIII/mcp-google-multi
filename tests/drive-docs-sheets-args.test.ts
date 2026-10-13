@@ -260,3 +260,20 @@ describe('parseA1Range', () => {
     });
   });
 });
+
+describe('sheets_copy_sheet_to', () => {
+  it('copies a sheet into another spreadsheet and returns the new sheet properties', async () => {
+    const h = toolHarness({ respond: () => ({ sheetId: 99, title: 'Sheet1', index: 3 }) });
+    const res = await h.call('sheets_copy_sheet_to', {
+      account: 'test',
+      spreadsheetId: 'SRC',
+      sheetId: 1,
+      destinationSpreadsheetId: 'DST',
+    });
+    expect(res.isError).toBeFalsy();
+    expect(parse(res)).toEqual({ sheetId: 99, title: 'Sheet1', index: 3 });
+    const req = h.requests().find((r) => r.url.includes(':copyTo'));
+    expect(req?.url).toBe('https://sheets.googleapis.com/v4/spreadsheets/SRC/sheets/1:copyTo');
+    expect((req?.data as { destinationSpreadsheetId?: string })?.destinationSpreadsheetId).toBe('DST');
+  });
+});

@@ -422,6 +422,35 @@ export function registerSheetsTools(server: ToolRegistry, deps: CuratedToolDeps 
   );
 
   server.registerTool(
+    'sheets_copy_sheet_to',
+    {
+      description: 'Copy a tab into another spreadsheet (which may belong to a different account)',
+      inputSchema: {
+        account: accountEnum.describe('Google account alias'),
+        spreadsheetId: z.string().min(1).describe('Source spreadsheet ID'),
+        sheetId: z.number().describe('Source sheet ID'),
+        destinationSpreadsheetId: z.string().min(1).describe('Destination spreadsheet ID'),
+      },
+    },
+    async ({ account, spreadsheetId, sheetId, destinationSpreadsheetId }) => {
+      try {
+        const auth = await getClientFn(account as Account);
+        const sheets = sheetsClient({ version: 'v4', auth });
+        const res = await sheets.spreadsheets.sheets.copyTo({
+          spreadsheetId,
+          sheetId,
+          requestBody: { destinationSpreadsheetId },
+        });
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(res.data, null, 2) }],
+        };
+      } catch (error: any) {
+        return handleSheetsError(error, account as Account);
+      }
+    },
+  );
+
+  server.registerTool(
     'sheets_update_sheet_properties',
     {
       description: 'Rename a tab, change tab color, freeze rows/columns, hide/show, or change grid dimensions',
