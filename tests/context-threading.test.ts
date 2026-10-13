@@ -25,8 +25,7 @@ function contextFor(
 type Built = ReturnType<typeof contextFor>;
 
 const WIZARD = ['account_add', 'account_reauth', 'account_write_config'];
-// drive_upload is registered for every context (its contentBase64 form needs no host disk);
-// only its localPath form is owner-only, checked separately below.
+// drive_upload is always registered (contentBase64 needs no host disk); localPath is owner-only, checked below.
 const HOST_FILE_TOOLS = ['drive_download', 'drive_export', 'gmail_download_attachment'];
 
 let A: Built;
