@@ -594,6 +594,76 @@ describe('fs-atomic', () => {
     fastClock();
     expectBroken(p);
   });
+
+  describe('locking without hard links (link() denied)', () => {
+    const denyLink = (code: 'EACCES' | 'EPERM') =>
+      vi.spyOn(fs, 'linkSync').mockImplementation(() => {
+        const err = new Error(`${code}: operation not permitted, link`) as NodeJS.ErrnoException;
+        err.code = code;
+        throw err;
+      });
+
+    it.each(['EACCES', 'EPERM'] as const)('locks without a hard link when link() fails with %s', (code) => {
+      denyLink(code);
+      const p = path.join(base, 'f.json');
+      let ran = false;
+      withFileLock(p, () => {
+        ran = true;
+        expect(readFileSync(lockOf(p), 'utf8')).toBe(String(process.pid));
+      });
+      expect(ran).toBe(true);
+      expect(droppings(p)).toEqual([]);
+    });
+
+    it('never lets a second writer in while the fallback lock is held', () => {
+      denyLink('EACCES');
+      const p = path.join(base, 'f.json');
+      let innerRan = false;
+      withFileLock(p, () => {
+        fastClock();
+        expect(() => withFileLock(p, () => void (innerRan = true))).toThrow(/Timed out waiting/);
+      });
+      expect(innerRan).toBe(false);
+      expect(droppings(p)).toEqual([]);
+    });
+
+    it('breaks a stale fallback lock, the same as a stale linked one', () => {
+      denyLink('EACCES');
+      const p = path.join(base, 'f.json');
+      plantLock(p, { pid: absentPid(), mtimeMs: Date.now() });
+      expectBroken(p);
+    });
+
+    it('treats an empty fallback lock younger than the write grace as held, not dead', () => {
+      denyLink('EACCES');
+      const p = path.join(base, 'f.json');
+      const lock = lockOf(p);
+      writeFileSync(lock, '', { mode: 0o600 });
+      const at = Date.now();
+      let call = 0;
+      vi.spyOn(Date, 'now').mockImplementation(() => {
+        call += 1;
+        if (call === 1) return at; // deadline computed from "now"
+        if (call === 2) return at + 100; // age check: well inside the 2 s grace
+        return at + 10_000; // immediately past the deadline, to end the test
+      });
+      let ran = false;
+      expect(() => withFileLock(p, () => void (ran = true))).toThrow(/Timed out waiting/);
+      expect(ran).toBe(false);
+      expect(existsSync(lock)).toBe(true);
+      expect(readFileSync(lock, 'utf8')).toBe('');
+      expect(existsSync(`${lock}.break`)).toBe(false);
+    });
+
+    it('breaks an empty fallback lock once it is older than the write grace', () => {
+      denyLink('EACCES');
+      const p = path.join(base, 'f.json');
+      const lock = lockOf(p);
+      writeFileSync(lock, '', { mode: 0o600 });
+      utimesSync(lock, new Date(Date.now() - 3_000), new Date(Date.now() - 3_000));
+      expectBroken(p);
+    });
+  });
 });
 
 describe('reload safety (dispatch path must never exit)', () => {

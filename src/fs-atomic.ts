@@ -11,6 +11,9 @@ const RENAME_RETRY_MS = 20;
 const LOCK_LEASE_MS = 60_000;
 // Breaking a lock takes microseconds, so an older breaker file was left by a crash.
 const BREAKER_STALE_MS = 2_000;
+// The no-hard-link fallback writes the lock in two syscalls (create, then the
+// pid); a reader can catch it empty in between. See docs/internals.md.
+const LOCK_WRITE_GRACE_MS = 2_000;
 const PROCESS_START_MS = performance.timeOrigin;
 const OWNER_NAME = /^(\d+)\.(\d+|host)\.(\d+)\.([0-9a-f]{8}|0)\.[0-9a-f]{12}\.owner$/;
 
@@ -136,6 +139,7 @@ function probeDead(pid: number): boolean {
 }
 
 function holderDead(holder: LockHolder, now: number): boolean {
+  if (holder.body === '' && now - holder.mtimeMs < LOCK_WRITE_GRACE_MS) return false;
   const pid = Number(holder.body);
   if (!(Number.isSafeInteger(pid) && pid > 0)) return true;
   const leaseOver = now - holder.mtimeMs >= LOCK_LEASE_MS;
@@ -222,7 +226,20 @@ export function withFileLock<T>(absPath: string, fn: () => T, label = `lock: ${a
         break;
       } catch (error) {
         const err = error as NodeJS.ErrnoException;
-        if (err.code !== 'EEXIST') throw error;
+        if (err.code === 'EACCES' || err.code === 'EPERM') {
+          // link() is denied in some private storage (Android/Termux) and on
+          // filesystems without hard links; fall back to the lock carrying
+          // the pid directly. See docs/internals.md.
+          try {
+            fs.writeFileSync(lock, String(process.pid), { mode: 0o600, flag: 'wx' });
+            linked = true;
+            break;
+          } catch (writeError) {
+            if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError;
+          }
+        } else if (err.code !== 'EEXIST') {
+          throw error;
+        }
         try {
           const holder = readHolder(lock);
           if (holder && holderDead(holder, Date.now()) && breakLock(lock, holder)) continue;
