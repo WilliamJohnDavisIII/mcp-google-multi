@@ -796,6 +796,20 @@ export function registerDriveTools(server: ToolRegistry, deps: CuratedToolDeps =
       },
     },
     async ({ account, fileId, type, role, emailAddress, domain, sendNotification, emailMessage, transferOwnership, expirationTime }) => {
+      if ((type === 'user' || type === 'group') && !emailAddress) {
+        return invalidParams(
+          account as Account,
+          `type is "${type}" but emailAddress was not supplied.`,
+          'Pass emailAddress, the grantee to share with.',
+        );
+      }
+      if (type === 'domain' && !domain) {
+        return invalidParams(
+          account as Account,
+          'type is "domain" but domain was not supplied.',
+          'Pass domain, e.g. "example.com".',
+        );
+      }
       {
         // Outbound allowlist (off unless GOOGLE_OUTBOUND_ALLOWLIST is set): user/group
         // grantees must match, a domain share needs its exact "@domain" entry, "anyone" is refused while active.
