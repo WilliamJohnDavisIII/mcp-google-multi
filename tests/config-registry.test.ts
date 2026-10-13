@@ -695,6 +695,31 @@ describe('fs-atomic', () => {
       expect(droppings(p)).toEqual([]);
     });
 
+    it('when binding the fallback lock to its owner file fails, the lock is removed and the error rethrown, and the next call succeeds at once', () => {
+      denyLink('EACCES');
+      const p = path.join(base, 'f.json');
+      const err = new Error('ENOSPC: no space left on device, write') as NodeJS.ErrnoException;
+      err.code = 'ENOSPC';
+      // The first writeFileSync is the owner file's initial placeholder (has a
+      // 'wx' flag option); this targets only the later binding-record write.
+      const realWriteFileSync = fs.writeFileSync.bind(fs);
+      let thrown = false;
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(((target: string, ...rest: unknown[]) => {
+        if (!thrown && String(target).endsWith('.owner') && rest.length === 1) {
+          thrown = true;
+          throw err;
+        }
+        return (realWriteFileSync as (...a: unknown[]) => void)(target, ...rest);
+      }) as unknown as typeof fs.writeFileSync);
+      expect(() => withFileLock(p, () => {})).toThrow('ENOSPC');
+      expect(existsSync(lockOf(p))).toBe(false);
+      expect(droppings(p)).toEqual([]);
+      vi.restoreAllMocks();
+      let ran = false;
+      withFileLock(p, () => void (ran = true));
+      expect(ran).toBe(true);
+    });
+
     it('treats an empty fallback lock younger than the write grace as held, not dead', () => {
       denyLink('EACCES');
       const p = path.join(base, 'f.json');

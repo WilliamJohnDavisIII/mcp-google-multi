@@ -257,7 +257,19 @@ function takeFallbackLock(lock: string, ownerFile: string): LockAcquisition {
     throw error;
   }
   fs.closeSync(fd);
-  fs.writeFileSync(ownerFile, bindingRecord(acquired));
+  try {
+    fs.writeFileSync(ownerFile, bindingRecord(acquired));
+  } catch (error) {
+    // The lock already exists holding our live pid; without this cleanup
+    // every other writer sees an ownerless holder and waits out the full lease.
+    try {
+      const current = fs.lstatSync(lock, { bigint: true });
+      if (sameFile(current, acquired) && current.mtimeNs === acquired.mtimeNs) fs.rmSync(lock, { force: true });
+    } catch (cleanupError) {
+      if (!isEnoent(cleanupError)) throw cleanupError;
+    }
+    throw error;
+  }
   return acquired;
 }
 
