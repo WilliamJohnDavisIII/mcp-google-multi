@@ -143,6 +143,15 @@ afterEach(() => {
 });
 
 describe('google_api_search', () => {
+  it('advertises google_api_call as a destructive write despite its read cud, and google_api_search as read-only', () => {
+    const { registry } = setup(FULL);
+    const call = registry.tools.find((t) => t.name === 'google_api_call')!;
+    const search = registry.tools.find((t) => t.name === 'google_api_search')!;
+    expect(call.cud).toBe('read');
+    expect(call.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false });
+    expect(search.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
+  });
+
   it('returns matching methods with cud and invocation hint', async () => {
     const { search, dir } = setup(FULL);
     cleanupDirs.push(dir);

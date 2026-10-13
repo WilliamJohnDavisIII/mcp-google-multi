@@ -107,6 +107,11 @@ export function serviceOf(name: string): string {
 // read tools that write local files — same savePath fanned across accounts would clobber
 const FANOUT_EXCLUDE = new Set(['gmail_download_attachment', 'drive_download', 'drive_export']);
 
+/** cud=read for gating/fan-out, yet they write (local files, the account
+ * registry, an MCP-client config): advertised as writes so annotation-keyed
+ * clients prompt instead of auto-running them. */
+const WRITES_DESPITE_READ = new Set([...FANOUT_EXCLUDE, 'account_add', 'account_reauth', 'account_write_config']);
+
 /** Account-management tools: the `account` they take is the SUBJECT of the
  * operation, not the identity it runs as, so injecting the configured default
  * would silently retarget them. `account_add` would adopt the default as the
@@ -188,12 +193,14 @@ export class ToolRegistry {
     this.registerTool = ((name: string, config: ToolConfig, handler: (...a: unknown[]) => unknown) => {
       const service = serviceOf(name);
       const cud = config.cud ?? inferCud(name);
-      // destructiveHint=false claims "additive only" (MCP spec) — updates overwrite, so they stay true.
+      // Every write is destructive: clients key per-call approval on it, and a
+      // create (send, share, upload) is no less consequential than an update.
       // idempotent: reads trivially, deletes (already-gone = same), updates
       // (overwrite converges); creates are not (send twice = two emails).
+      const writes = cud !== 'read' || WRITES_DESPITE_READ.has(name);
       const annotations = {
-        readOnlyHint: cud === 'read',
-        destructiveHint: cud === 'delete' || cud === 'update',
+        readOnlyHint: !writes,
+        destructiveHint: writes,
         idempotentHint: cud !== 'create',
         ...config.annotations,
       };
