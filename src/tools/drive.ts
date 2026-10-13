@@ -152,9 +152,11 @@ export function registerDriveTools(server: ToolRegistry, deps: CuratedToolDeps =
         driveId: z.string().optional().describe('Optional shared drive ID'),
         pageToken: z.string().min(1).optional()
           .describe('Continuation token from a previous call\'s nextPageToken'),
+        orderBy: z.string().optional()
+          .describe('Sort key(s) for files.list, e.g. "modifiedTime desc" or "folder,name". Default: Drive\'s relevance ranking for the query, an arbitrary stable order otherwise.'),
       },
     },
-    async ({ account, query, maxResults, driveId, pageToken }) => {
+    async ({ account, query, maxResults, driveId, pageToken, orderBy }) => {
       try {
         // normalizeDriveQuery trims to '' and Drive reads that as "everything", so
         // a blank query would list the whole drive as a "search" result.
@@ -183,6 +185,7 @@ export function registerDriveTools(server: ToolRegistry, deps: CuratedToolDeps =
           params.corpora = 'drive';
         }
         if (pageToken) params.pageToken = pageToken;
+        if (orderBy) params.orderBy = orderBy;
 
         const res = await drive.files.list(params);
         const incomplete = res.data.incompleteSearch === true;
