@@ -6,16 +6,17 @@ const policy = (over: Partial<Policy> = {}): Policy =>
   ({ profile: 'safe-writes', readOnly: false, allow: [], deny: [], ...over });
 
 const TRASH = { name: 'gmail_trash', service: 'gmail', cud: 'delete' as const };
+const DELETE = { name: 'drive_delete', service: 'drive', cud: 'delete' as const };
 const SEND = { name: 'gmail_send', service: 'gmail', cud: 'create' as const };
 
-const hintOf = (tool: typeof TRASH | typeof SEND, p: Policy) =>
+const hintOf = (tool: typeof TRASH | typeof DELETE | typeof SEND, p: Policy) =>
   JSON.parse(writeDisabledResult(tool, p).content[0].text).hint as string;
 
 describe('the hint never proposes the setting that just refused', () => {
   // A delete refused under safe-writes was once told to "Enable via
   // GOOGLE_PROFILE=safe-writes|full-writes"; following that changes nothing.
   it('does not offer the current profile back to the caller', () => {
-    const h = hintOf(TRASH, policy({ profile: 'safe-writes' }));
+    const h = hintOf(DELETE, policy({ profile: 'safe-writes' }));
     expect(h).toContain('full-writes');
     expect(h).not.toContain('=safe-writes');
     expect(h).not.toContain('or safe-writes');
@@ -72,7 +73,7 @@ describe('the suggested allow pattern is one the matcher accepts', () => {
   });
 
   it('suggests the operation, not the blunt service wildcard', () => {
-    expect(hintOf(TRASH, policy({ profile: 'safe-writes' }))).toContain('"gmail:trash"');
+    expect(hintOf(TRASH, policy({ profile: 'read-only' }))).toContain('"gmail:trash"');
   });
 });
 
@@ -80,9 +81,12 @@ describe('denyReason', () => {
   it('is undefined when the call is permitted', () => {
     expect(denyReason(SEND, policy({ profile: 'full-writes' }))).toBeUndefined();
     expect(denyReason({ name: 'gmail_search', service: 'gmail', cud: 'read' }, policy({ readOnly: true }))).toBeUndefined();
+    // gmail_trash moves to Trash rather than deleting permanently, so
+    // safe-writes permits it like any other non-privileged write.
+    expect(denyReason(TRASH, policy({ profile: 'safe-writes' }))).toBeUndefined();
   });
 
   it('reports the profile when nothing more specific refused', () => {
-    expect(denyReason(TRASH, policy({ profile: 'safe-writes' }))).toEqual({ rule: 'profile', profile: 'safe-writes' });
+    expect(denyReason(DELETE, policy({ profile: 'safe-writes' }))).toEqual({ rule: 'profile', profile: 'safe-writes' });
   });
 });
