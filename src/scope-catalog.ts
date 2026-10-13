@@ -14,6 +14,9 @@ export interface BundleCatalogEntry {
   description: string;
   risk: 'low' | 'medium' | 'high';
   workspaceOnly?: boolean;
+  // Google's consent screen refuses these scopes for a personal account
+  // ("Some requested scopes cannot be shown"), failing the whole sign-in.
+  personalRefused?: boolean;
 }
 
 export const ADMIN_SCOPES = [
@@ -78,6 +81,7 @@ export const BUNDLE_CATALOG: Record<string, BundleCatalogEntry> = {
     ],
     description: 'Manage Cloud Identity groups and devices across the directory.',
     risk: 'high',
+    personalRefused: true,
   },
   cloudsearch: {
     scopes: ['https://www.googleapis.com/auth/cloud_search'],
@@ -94,6 +98,7 @@ export const BUNDLE_CATALOG: Record<string, BundleCatalogEntry> = {
     scopes: ['https://www.googleapis.com/auth/keep'],
     description: 'Read and edit Google Keep notes.',
     risk: 'low',
+    personalRefused: true,
   },
   driveactivity: {
     scopes: ['https://www.googleapis.com/auth/drive.activity.readonly'],
@@ -182,6 +187,19 @@ const warnedAliases = new Set<string>();
  * "toString") passes a plain `in` or index lookup, so membership is own-key only. */
 export function isKnownBundle(name: string): boolean {
   return Object.hasOwn(BUNDLE_CATALOG, name);
+}
+
+const PERSONAL_ADDRESS_RE = /@(?:gmail|googlemail)\.com$/i;
+
+/** A gmail.com or googlemail.com address, which is always a personal Google account. */
+export function isPersonalGoogleAddress(email: string): boolean {
+  return PERSONAL_ADDRESS_RE.test(email.trim());
+}
+
+/** The bundles in `bundles` that Google refuses on the consent screen of the account at `email`. */
+export function refusedBundlesFor(email: string, bundles: readonly string[]): string[] {
+  if (!isPersonalGoogleAddress(email)) return [];
+  return bundles.filter((b) => isKnownBundle(b) && BUNDLE_CATALOG[b].personalRefused === true);
 }
 
 export function resolveBundleAliases(bundles: string[]): string[] {

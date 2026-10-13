@@ -5,7 +5,7 @@ import { getAccountSet, invalidateAccountSet, refreshAccountSetIfStale } from '.
 import { ALIAS_RE, mutateConfigFile } from '../config-file.js';
 import { writeToken } from '../token-store.js';
 import { resolveScopesForAccount } from '../auth.js';
-import { BUNDLE_CATALOG, closestBundle, isKnownBundle, resolveBundleAliases } from '../scope-catalog.js';
+import { BUNDLE_CATALOG, closestBundle, isKnownBundle, refusedBundlesFor, resolveBundleAliases } from '../scope-catalog.js';
 import { openUrl } from '../open-url.js';
 import { coerceBoolean } from './_coerce.js';
 import { safeMessage, stringifyEnvelope } from './_errors.js';
@@ -38,9 +38,13 @@ export interface AddForm {
 // a comma-separated field for power users, and `allBundles` grants every one.
 const CHECKBOX_BUNDLES = ['forms', 'chat'] as const;
 
-/** Every optional bundle (admin is granted via its own checkbox, not here). */
-export function allOptionalBundles(): string[] {
-  return Object.keys(BUNDLE_CATALOG).filter((n) => n !== 'admin');
+/** Every optional bundle (admin is granted via its own checkbox, not here),
+ * less those Google refuses for the account at `email` when one is given. */
+export function allOptionalBundles(email?: string): string[] {
+  const all = Object.keys(BUNDLE_CATALOG).filter((n) => n !== 'admin');
+  if (email === undefined) return all;
+  const refused = new Set(refusedBundlesFor(email, all));
+  return all.filter((n) => !refused.has(n));
 }
 
 /** elicitation/create form schema (flat primitives only, per the MCP spec). */
@@ -80,7 +84,7 @@ export function validateAddForm(input: Partial<AddForm>, existingAliases: string
   }
   if (input.allBundles === true) {
     // "All optional scopes" supersedes the individual picks.
-    return { ok: true, alias, email, bundles: allOptionalBundles(), admin: input.admin === true };
+    return { ok: true, alias, email, bundles: allOptionalBundles(email), admin: input.admin === true };
   }
   const picked = CHECKBOX_BUNDLES.filter((b) => input[b] === true);
   const rawOther = (input.otherBundles ?? '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -100,6 +104,16 @@ export function validateAddForm(input: Partial<AddForm>, existingAliases: string
         alias,
       };
     }
+  }
+  const refused = refusedBundlesFor(email, bundles);
+  if (refused.length > 0) {
+    return {
+      ok: false,
+      slug: 'E_VALIDATION',
+      message: `Google does not let a personal account grant ${refused.map((b) => `"${b}"`).join(', ')}.`,
+      hint: 'Leave it out, or link a Google Workspace account for it.',
+      alias,
+    };
   }
   return { ok: true, alias, email, bundles, admin: input.admin === true };
 }
