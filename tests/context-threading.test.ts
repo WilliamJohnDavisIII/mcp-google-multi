@@ -1,100 +1,29 @@
-import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { buildRegistry, requestHooksFor } from '../src/compose.js';
-import { buildIdentityContext, isOwnerContext, type IdentityContext } from '../src/identity.js';
+import { buildIdentityContext, isOwnerContext } from '../src/identity.js';
 import { clearDiscoveryMemoryCache } from '../src/discovery-client.js';
 import type { AccountSet } from '../src/accounts.js';
-import type { ScopeProfile } from '../src/scope-catalog.js';
+import { accountSet, fakeServer, toolHarness, parseResult as parse, type GoogleRequest } from './_tool-harness.js';
 
 // buildRegistry must resolve every handler through the context it is given. tests/setup.ts seeds the
 // GLOBAL registry with the same alias `test`, so a handler that fell back to it would surface the wrong email/token, not silently pass.
 
-type Result = { content: { text: string }[]; isError?: boolean };
-type Handler = (args: Record<string, unknown>, extra?: unknown) => Promise<Result>;
-type Req = { url: string; method?: string; data?: unknown };
-
-interface Row {
-  email: string;
-  admin?: boolean;
-  scopeProfile?: string;
-}
-
-function setWith(rows: Record<string, Row>, opts: { defaultAccount?: string; scopeProfiles?: Record<string, ScopeProfile> } = {}): AccountSet {
-  const configs: AccountSet['configs'] = {};
-  for (const [alias, r] of Object.entries(rows)) {
-    configs[alias] = {
-      email: r.email,
-      tokenPath: `/nonexistent/${alias}/token.json`,
-      encPath: `/nonexistent/${alias}.enc`,
-      source: 'config',
-      ...(r.admin ? { admin: true } : {}),
-      ...(r.scopeProfile ? { scopeProfile: r.scopeProfile } : {}),
-    };
-  }
-  return {
-    aliases: Object.keys(rows),
-    configs,
-    scopeProfiles: { base: { bundles: [] }, ...opts.scopeProfiles },
-    source: 'file',
-    stamp: '1:0',
-    ...(opts.defaultAccount ? { defaultAccount: opts.defaultAccount, defaultAccountSource: 'config' as const } : {}),
-  };
-}
-
-function fakeServer() {
-  const handlers: Record<string, Handler> = {};
-  const schemas: Record<string, Record<string, unknown>> = {};
-  const server = {
-    registerTool: (name: string, config: { inputSchema?: Record<string, unknown> }, handler: Handler) => {
-      handlers[name] = handler;
-      schemas[name] = config.inputSchema ?? {};
-      return 'ok';
-    },
-    sendToolListChanged: vi.fn(),
-    server: { setRequestHandler: () => {}, getClientCapabilities: () => undefined },
-  };
-  return { server, handlers, schemas };
-}
-
-const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
+type Req = GoogleRequest;
+const setWith = accountSet;
 
 function contextFor(
   subject: string,
   set: AccountSet,
   opts: { scope?: string; requestImpl?: (req: Req) => Promise<unknown> } = {},
 ) {
-  const request = vi.fn(opts.requestImpl ?? (async () => ({ data: {}, headers: new Headers() })));
-  const getClient = vi.fn(async () => ({ request }));
-  const token = {
-    access_token: `at-${subject}`,
-    refresh_token: `rt-${subject}`,
-    scope: opts.scope ?? GMAIL_SCOPE,
-    token_type: 'Bearer',
-    expiry_date: Date.now() + 3_600_000,
-  };
-  const tokenStore = {
-    readToken: vi.fn(() => token),
-    writeToken: vi.fn(),
-    updateToken: vi.fn(),
-    hasToken: vi.fn(() => true),
-  };
-  const ctx = {
-    subject,
-    accounts: set,
-    policy: { profile: 'full-writes', readOnly: false, allow: [], deny: [] },
-    getClient,
-    tokenStore,
-  } as unknown as IdentityContext;
-  const { server, handlers, schemas } = fakeServer();
-  buildRegistry(server as never, ctx, 'eager');
-  return { ctx, request, getClient, tokenStore, handlers, schemas };
+  return toolHarness({ subject, accounts: set, scope: opts.scope, requestImpl: opts.requestImpl });
 }
 
 type Built = ReturnType<typeof contextFor>;
 
-const parse = (r: Result) => JSON.parse(r.content[0].text);
 const WIZARD = ['account_add', 'account_reauth', 'account_write_config'];
 const HOST_FILE_TOOLS = ['drive_upload', 'drive_download', 'drive_export', 'gmail_download_attachment'];
 
