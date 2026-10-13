@@ -124,10 +124,8 @@ export function registerDiscoverTools(registry: ToolRegistry, policy: Policy): v
                 service,
                 operations,
                 writeControl: rendered?.hint ?? describePolicy(policy),
-                next:
-                  operations.length > 0
-                    ? 'Call the chosen tool by its exact name. A client that loads tools on demand may need its own tool-search or load step before the call succeeds.'
-                    : `No ${service} operation matches "${query}". Call again without query for the full catalog.`,
+                // catalog() falls back to a full one-line listing when nothing matches, so this is never empty.
+                next: 'Call the chosen tool by its exact name. A client that loads tools on demand may need its own tool-search or load step before the call succeeds.',
               }),
             },
           ],

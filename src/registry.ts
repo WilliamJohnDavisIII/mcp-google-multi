@@ -68,6 +68,12 @@ export interface CatalogOperation {
   unreachable?: true;
 }
 
+/** The leading sentence of a (possibly multi-sentence) tool description. */
+function firstSentence(text: string): string {
+  const idx = text.indexOf('. ');
+  return idx === -1 ? text : text.slice(0, idx + 1);
+}
+
 interface ToolConfig {
   description?: string;
   inputSchema?: z.ZodRawShape;
@@ -380,17 +386,32 @@ export class ToolRegistry {
   }
 
   catalog(service: string, query?: string): CatalogOperation[] {
+    const candidates = this.tools.filter((t) => !t.meta && t.service === service);
+    const toOp = (t: ToolEntry, summary: string = t.description): CatalogOperation => ({
+      tool: t.name,
+      summary,
+      args: Object.keys(t.inputShape),
+      cud: t.cud,
+      ...(this.isUngrantable(t) ? { unreachable: true as const } : {}),
+    });
+
     const q = query?.trim().toLowerCase();
-    return this.tools
-      .filter((t) => !t.meta && t.service === service)
-      .filter((t) => !q || t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
-      .map((t) => ({
-        tool: t.name,
-        summary: t.description,
-        args: Object.keys(t.inputShape),
-        cud: t.cud,
-        ...(this.isUngrantable(t) ? { unreachable: true as const } : {}),
-      }));
+    if (!q) return candidates.map((t) => toOp(t));
+
+    // Tokenized OR-match (a strict superset of a plain substring test: a full-string
+    // hit implies every one of its tokens also hits) ranked by how many tokens matched.
+    const ranked = candidates
+      .map((t) => {
+        const hay = `${t.name} ${t.description}`.toLowerCase();
+        return { t, matched: q.split(/\s+/).filter(Boolean).filter((tok) => hay.includes(tok)).length };
+      })
+      .filter((r) => r.matched > 0)
+      .sort((a, b) => b.matched - a.matched);
+    if (ranked.length > 0) return ranked.map((r) => toOp(r.t));
+
+    // Nothing matched: list the whole service so the agent can still browse,
+    // one-line summaries only so a wide miss doesn't blow the response budget.
+    return candidates.map((t) => toOp(t, firstSentence(t.description)));
   }
 
   /** The metrics recorder, for hook sites (escape hatch); null when off. */

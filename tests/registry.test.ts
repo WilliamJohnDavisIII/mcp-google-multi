@@ -189,7 +189,33 @@ describe('ToolRegistry', () => {
       { tool: 'drive_search', summary: 'Search files', args: ['account'], cud: 'read' },
     ]);
     expect(reg.catalog('drive', 'upload').map((o) => o.tool)).toEqual(['drive_upload']);
-    expect(reg.catalog('drive', 'nothing-matches')).toEqual([]);
+    // No token matches anything: fall back to the full listing rather than an empty result.
+    expect(reg.catalog('drive', 'nothing-matches')).toEqual([
+      { tool: 'drive_upload', summary: 'Upload a file to Drive', args: ['account', 'path'], cud: 'create' },
+      { tool: 'drive_search', summary: 'Search files', args: ['account'], cud: 'read' },
+    ]);
+  });
+
+  it('tokenizes a multi-word query, OR-matches tokens, and ranks by matched token count', () => {
+    const { server } = fakeServer();
+    const reg = new ToolRegistry(server as never, FULL_WRITES);
+    reg.registerTool('drive_upload', { description: 'Upload a file to Drive', inputSchema: { account: z.string() } }, () => {});
+    reg.registerTool('drive_search', { description: 'Search files', inputSchema: { account: z.string() } }, () => {});
+    // "file" hits both (upload's description, search's "files"); "upload" only hits drive_upload.
+    expect(reg.catalog('drive', 'file upload').map((o) => o.tool)).toEqual(['drive_upload', 'drive_search']);
+  });
+
+  it('a no-match fallback lists every op with a one-line summary, not the full description', () => {
+    const { server } = fakeServer();
+    const reg = new ToolRegistry(server as never, FULL_WRITES);
+    reg.registerTool(
+      'drive_export',
+      { description: 'Export a file to another format. Supports Docs, Sheets and Slides.', inputSchema: { account: z.string() } },
+      () => {},
+    );
+    const result = reg.catalog('drive', 'zzz-nope');
+    expect(result.map((o) => o.tool)).toEqual(['drive_export']);
+    expect(result[0].summary).toBe('Export a file to another format.');
   });
 
   it('reveal notifies once per service and flips visibility', () => {
