@@ -645,6 +645,56 @@ describe('fs-atomic', () => {
       expectBroken(p);
     });
 
+    it('creates the fallback lock at 0600', () => {
+      denyLink('EACCES');
+      const p = path.join(base, 'f.json');
+      withFileLock(p, () => {
+        if (process.platform !== 'win32') expect(statSync(lockOf(p)).mode & 0o777).toBe(0o600);
+      });
+    });
+
+    it('a non-EEXIST error creating the fallback lock is not swallowed', () => {
+      denyLink('EACCES');
+      const p = path.join(base, 'f.json');
+      const err = new Error('EIO: i/o error, open') as NodeJS.ErrnoException;
+      err.code = 'EIO';
+      // writeFileSync (the owner file) calls fs.openSync internally too; only
+      // the lock path itself (never a ".owner" name) is this test's target.
+      const realOpenSync = fs.openSync.bind(fs);
+      vi.spyOn(fs, 'openSync').mockImplementation(((...args: unknown[]) => {
+        if (typeof args[0] === 'string' && !args[0].endsWith('.owner')) throw err;
+        return (realOpenSync as (...a: unknown[]) => number)(...args);
+      }) as unknown as typeof fs.openSync);
+      expect(() => withFileLock(p, () => {})).toThrow('EIO');
+    });
+
+    it('does not fall back for a link() error other than EACCES or EPERM', () => {
+      const err = new Error('EIO: i/o error, link') as NodeJS.ErrnoException;
+      err.code = 'EIO';
+      vi.spyOn(fs, 'linkSync').mockImplementation(() => {
+        throw err;
+      });
+      const p = path.join(base, 'f.json');
+      expect(() => withFileLock(p, () => {})).toThrow('EIO');
+    });
+
+    it('on a write error after the exclusive open, the empty lock is removed and the error rethrown', () => {
+      denyLink('EACCES');
+      const p = path.join(base, 'f.json');
+      const err = new Error('ENOSPC: no space left on device, write') as NodeJS.ErrnoException;
+      err.code = 'ENOSPC';
+      // writeFileSync (the owner file) calls fs.writeSync with a Buffer internally;
+      // only the fallback lock's own write passes the pid as a bare string.
+      const realWriteSync = fs.writeSync.bind(fs);
+      vi.spyOn(fs, 'writeSync').mockImplementation(((...args: unknown[]) => {
+        if (typeof args[1] === 'string') throw err;
+        return (realWriteSync as (...a: unknown[]) => number)(...args);
+      }) as unknown as typeof fs.writeSync);
+      expect(() => withFileLock(p, () => {})).toThrow('ENOSPC');
+      expect(existsSync(lockOf(p))).toBe(false);
+      expect(droppings(p)).toEqual([]);
+    });
+
     it('treats an empty fallback lock younger than the write grace as held, not dead', () => {
       denyLink('EACCES');
       const p = path.join(base, 'f.json');

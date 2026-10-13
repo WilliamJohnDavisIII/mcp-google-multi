@@ -239,10 +239,24 @@ type LockAcquisition = FileId & { mtimeNs: bigint };
 // is bound to it by a recorded identity instead of a hard link. See docs/internals.md.
 function takeFallbackLock(lock: string, ownerFile: string): LockAcquisition {
   const fd = fs.openSync(lock, 'wx', 0o600);
-  fs.writeSync(fd, String(process.pid));
-  const stat = fs.fstatSync(fd, { bigint: true });
+  let acquired: LockAcquisition;
+  try {
+    fs.writeSync(fd, String(process.pid));
+    const stat = fs.fstatSync(fd, { bigint: true });
+    acquired = { dev: stat.dev, ino: stat.ino, mtimeNs: stat.mtimeNs };
+  } catch (error) {
+    // The lock is left empty; remove it only if it is still the one we just
+    // created, then rethrow so the caller never retries a write failure.
+    const stat = fs.fstatSync(fd, { bigint: true });
+    fs.closeSync(fd);
+    try {
+      if (sameFile(fs.lstatSync(lock, { bigint: true }), stat)) fs.rmSync(lock, { force: true });
+    } catch (cleanupError) {
+      if (!isEnoent(cleanupError)) throw cleanupError;
+    }
+    throw error;
+  }
   fs.closeSync(fd);
-  const acquired: LockAcquisition = { dev: stat.dev, ino: stat.ino, mtimeNs: stat.mtimeNs };
   fs.writeFileSync(ownerFile, bindingRecord(acquired));
   return acquired;
 }
