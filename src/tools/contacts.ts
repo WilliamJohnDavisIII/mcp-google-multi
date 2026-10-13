@@ -51,7 +51,7 @@ export interface ResolveCandidate {
   hasOrg: boolean;
 }
 
-/** Accent-fold + lowercase for name comparison ("Rym" == "Rÿm"). */
+/** Accent-fold + lowercase for name comparison ("Zoe" == "Zoë"). */
 const foldName = (s: string): string =>
   s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
 
@@ -203,7 +203,7 @@ export function registerContactsTools(server: ToolRegistry, deps: CuratedToolDep
       description: 'Resolve a free-text name/alias to ONE canonical email address (ranked + tie-broken), so you need not hand-expand transliteration OR-queries. Returns a single confident match, an explicit ambiguous candidate list, or null when nothing matches. For picking a recipient before gmail_send.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        name: z.string().min(1).describe('Free-text name or alias to resolve (e.g. "Rym")'),
+        name: z.string().min(1).describe('Free-text name or alias to resolve (e.g. "Zoe")'),
         maxCandidates: z.number().min(1).max(10).default(5).optional()
           .describe('Max candidates to return when ambiguous (1-10, default: 5)'),
         includeOtherContacts: coerceBoolean.optional()
