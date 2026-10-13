@@ -54,4 +54,34 @@ describe('gmail_search since/until', () => {
     expect(env.message).toContain('until');
     expect(h.request).not.toHaveBeenCalled();
   });
+
+  it('rejects an offsetless since date-time with invalidParams before any request', async () => {
+    const h = toolHarness();
+    const res = await h.call('gmail_search', { account: 'test', query: 'is:unread', since: '2026-01-01T09:00:00' });
+    expect(res.isError).toBe(true);
+    const env = parseResult(res);
+    expect(env.error).toBe('invalid_params');
+    expect(env.message).toContain('since');
+    expect(env.hint).toContain('2026-01-01T09:00:00Z');
+    expect(h.request).not.toHaveBeenCalled();
+  });
+
+  it('rejects an offsetless until date-time with invalidParams before any request', async () => {
+    const h = toolHarness();
+    const res = await h.call('gmail_search', { account: 'test', query: 'is:unread', until: '2026-01-01T09:00:00' });
+    expect(res.isError).toBe(true);
+    const env = parseResult(res);
+    expect(env.error).toBe('invalid_params');
+    expect(env.message).toContain('until');
+    expect(env.hint).toContain('2026-01-01T09:00:00Z');
+    expect(h.request).not.toHaveBeenCalled();
+  });
+
+  it('accepts since with +01:00 offset and converts to correct epoch seconds', async () => {
+    const h = toolHarness({ respond: () => ({ messages: [] }) });
+    await h.call('gmail_search', { account: 'test', query: 'is:unread', since: '2026-01-01T09:00:00+01:00' });
+    const req = h.requests().find((r) => r.url.includes('/messages'));
+    // 2026-01-01T09:00:00+01:00 = 2026-01-01T08:00:00Z = epoch 1767254400
+    expect(req?.params).toMatchObject({ q: 'is:unread after:1767254400' });
+  });
 });

@@ -221,6 +221,15 @@ export async function resolveReply(
 // Gmail's after:/before: operators take epoch seconds; Date.parse accepts both
 // an ISO date and a full date-time, so one parse covers both input shapes.
 function parseEpochSeconds(value: string): number | null {
+  // A date-only value is interpreted as 00:00 UTC.
+  // A date-time must include Z or an offset (+HH:MM or -HH:MM) to be unambiguous.
+  if (value.includes('T')) {
+    const hasZ = value.endsWith('Z');
+    const hasOffset = /[+-]\d{2}:\d{2}$/.test(value);
+    if (!hasZ && !hasOffset) {
+      return null;
+    }
+  }
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
 }
@@ -523,9 +532,9 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
           .describe('Max results to return (default: 20, max: 100)'),
         full: coerceBoolean.optional().describe('Return the full row shape instead of the compact default'),
         since: z.string().optional()
-          .describe('Only messages on/after this ISO 8601 date or date-time, added to the query as after:<epoch seconds>'),
+          .describe('Only messages on/after this ISO 8601 date (00:00 UTC) or date-time with Z or offset, added to the query as after:<epoch seconds>'),
         until: z.string().optional()
-          .describe('Only messages before this ISO 8601 date or date-time, added to the query as before:<epoch seconds>'),
+          .describe('Only messages before this ISO 8601 date (00:00 UTC) or date-time with Z or offset, added to the query as before:<epoch seconds>'),
         includeSpamTrash: coerceBoolean.optional()
           .describe('Include Spam and Trash in the search. Gmail excludes both by default, even for in:anywhere.'),
       },
@@ -548,7 +557,7 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
             return invalidParams(
               account as Account,
               `\`since\` is not a parsable ISO 8601 date or date-time: "${since}".`,
-              'Pass an ISO 8601 date (e.g. "2026-01-01") or date-time (e.g. "2026-01-01T00:00:00Z").',
+              'Pass an ISO 8601 date (e.g. "2026-01-01") or a date-time with Z or offset (e.g. "2026-01-01T09:00:00Z").',
             );
           }
           effectiveQuery = `${effectiveQuery} after:${epoch}`;
@@ -559,7 +568,7 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
             return invalidParams(
               account as Account,
               `\`until\` is not a parsable ISO 8601 date or date-time: "${until}".`,
-              'Pass an ISO 8601 date (e.g. "2026-01-01") or date-time (e.g. "2026-01-01T00:00:00Z").',
+              'Pass an ISO 8601 date (e.g. "2026-01-01") or a date-time with Z or offset (e.g. "2026-01-01T09:00:00Z").',
             );
           }
           effectiveQuery = `${effectiveQuery} before:${epoch}`;
