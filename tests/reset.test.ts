@@ -6,7 +6,7 @@ const state = (aliases: string[], withTokens: string[]) => ({
   tokenPresent: (a: string) => withTokens.includes(a),
 });
 
-describe('planReset (B6)', () => {
+describe('planReset', () => {
   it('rejects an unknown --account', () => {
     const r = planReset({ account: 'nope', regenerateKey: false, yes: true }, state(['work', 'personal'], ['work']));
     expect(r.ok).toBe(false);

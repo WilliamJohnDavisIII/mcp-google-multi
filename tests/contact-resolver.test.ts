@@ -11,7 +11,7 @@ function cand(p: Partial<ResolveCandidate> & { displayName: string; email?: stri
   };
 }
 
-describe('resolveContacts (A10 tie-break)', () => {
+describe('resolveContacts tie-break', () => {
   it('exact name beats prefix match', () => {
     const out = resolveContacts(
       [cand({ displayName: 'Zoey', email: 'zoey@x.com' }), cand({ displayName: 'Zoe', email: 'zoe@x.com' })],
