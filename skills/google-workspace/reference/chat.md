@@ -31,7 +31,7 @@ List messages in a Chat space
 | `parent` | string | required | Space resource name, format: spaces/{space} |
 | `pageSize` | number | optional |  |
 | `pageToken` | string | optional |  |
-| `filter` | string | optional | Filter expression, e.g. "createTime > \"2026-01-01T00:00:00Z\"" |
+| `filter` | string | optional | Filter expression, e.g. "createTime > \\"2026-01-01T00:00:00Z\\"" |
 | `orderBy` | string | optional | e.g. "createTime DESC" |
 
 ## `chat_spaces_get`
@@ -56,4 +56,4 @@ List Google Chat spaces the user is a member of
 | `account` | string | optional | Google account alias; "*" = all accounts; omit for the default account |
 | `pageSize` | number | optional |  |
 | `pageToken` | string | optional |  |
-| `filter` | string | optional | Filter expression, e.g. "spaceType = \"DIRECT_MESSAGE\"" |
+| `filter` | string | optional | Filter expression, e.g. "spaceType = \\"DIRECT_MESSAGE\\"" |

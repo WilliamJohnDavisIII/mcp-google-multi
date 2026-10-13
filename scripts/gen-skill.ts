@@ -89,7 +89,7 @@ function argTable(tool: ToolEntry): string[] {
     const prop = props[name];
     const type = jsonTypeOf(prop);
     const req = required.has(name) ? 'required' : 'optional';
-    const desc = String(prop?.description ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+    const desc = String(prop?.description ?? '').replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, ' ');
     lines.push(`| \`${name}\` | ${type} | ${req} | ${desc} |`);
   }
   lines.push('');
