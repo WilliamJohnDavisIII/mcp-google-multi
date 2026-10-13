@@ -6,10 +6,8 @@ import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import type { Plugin } from 'turndown';
 
-// Send: one symmetric text format. body is Markdown; text/plain = the
-// source verbatim, text/html = this render. html:false ESCAPES raw HTML in
-// the body (the XSS-safe default); allowRawHtml swaps to the html:true
-// instance so an audited caller can pass literal HTML (e.g. inline color).
+// Send: body is Markdown; text/plain is the source, text/html is this render.
+// html:false escapes raw HTML in the body (XSS-safe default); allowRawHtml opts into html:true for an audited caller.
 const mdSafe = new MarkdownIt({ html: false, linkify: true });
 const mdRaw = new MarkdownIt({ html: true, linkify: true });
 
@@ -105,10 +103,8 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
-// Read: HTML-only bodies convert to Markdown so the model reads structure
-// (headings, links, lists, GFM tables), not a flat text dump. turndown's
-// bundled @mixmark-io/domino fork does NOT execute scripts; remove() drops
-// script/style/head entirely (turndown otherwise leaks their text content).
+// HTML-only bodies convert to Markdown so the model reads structure, not a flat
+// text dump; turndown's bundled domino fork doesn't execute scripts, and remove() drops script/style/head (which otherwise leak text).
 const turndownService = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-' });
 turndownService.use(gfm as Plugin);
 turndownService.remove(['script', 'style', 'head']);
@@ -192,9 +188,8 @@ export async function composeRaw(input: ComposeInput): Promise<string> {
     attachments: input.attachments,
     newline: '\r\n',
     textEncoding: 'base64',
-    // This server reads any attachment file itself and passes a Buffer;
-    // MailComposer must never touch the filesystem or network (SSRF / local
-    // file-read defense-in-depth).
+    // This server reads attachment files itself and passes a Buffer; MailComposer
+    // must never touch the filesystem or network (SSRF / local file-read defense-in-depth).
     disableFileAccess: true,
     disableUrlAccess: true,
   };

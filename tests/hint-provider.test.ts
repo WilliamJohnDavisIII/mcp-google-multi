@@ -4,10 +4,8 @@ import { HINT_KINDS, setHintProvider, hints, type HintProvider } from '../src/hi
 afterEach(() => setHintProvider(null));
 
 describe('HINT_KINDS', () => {
-  // The completeness check itself (every HintCase member present) is a
-  // compile-time assertion in src/hint-provider.ts: tsconfig.json only
-  // includes src/, so a type-only check living here would never be
-  // typechecked by `npm run typecheck` or by vitest's esbuild transform.
+  // The completeness check (every HintCase member present) is a compile-time assertion in
+  // src/hint-provider.ts; tsconfig only includes src/, so a check living here would never typecheck.
   it('has no duplicates and matches the exact expected set of kinds', () => {
     expect(HINT_KINDS.length).toBe(new Set(HINT_KINDS).size);
     expect([...HINT_KINDS].sort()).toEqual([

@@ -159,11 +159,8 @@ describe('scopeGrantDiff', () => {
 });
 
 describe('elicitation param shapes (validated against the SDK schemas)', () => {
-  // Schemas come from the SDK package we DECLARE as a dependency; the
-  // core package that defines them is only transitive.
-  // The url-mode branch shipped broken because `as never` at the call site
-  // disabled every shape check: elicitationId is required, so the request
-  // failed client-side validation and the branch always fell through.
+  // Schemas come from the SDK package (a direct dependency, not the transitive core package). The
+  // url-mode branch once shipped broken: `as never` hid that a required elicitationId was missing.
   it('url-mode params satisfy ElicitRequestURLParamsSchema', () => {
     const r = specTypeSchemas.ElicitRequestURLParams.safeParse(
       urlElicitationParams('work', 'https://accounts.google.com/o/oauth2/v2/auth?x=1', 'a'.repeat(32)),

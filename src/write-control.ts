@@ -25,9 +25,8 @@ interface ToolRef {
   name: string;
   service: string;
   cud: Cud;
-  /** The method's required OAuth scopes, when the caller knows them. Absent
-   * means "unknown", which is treated as not privileged: a missing scope list
-   * must not silently widen the gate OR silently break an ordinary write. */
+  // Absent means "unknown", treated as not privileged: a missing scope list
+  // must not silently widen the gate or break an ordinary write.
   scopes?: readonly string[];
 }
 
@@ -107,9 +106,8 @@ function matchesAny(tool: ToolRef, globs: string[]): boolean {
   return firstMatch(tool, globs) !== undefined;
 }
 
-/** Scopes that authorize acting on the whole organization, on legal holds, on
- * billing, or on deployed code. A write behind one of these is not a "safe"
- * write in any useful sense of the word, whatever its HTTP verb. */
+// Scopes that authorize acting on the whole organization, legal holds,
+// billing, or deployed code: not a "safe" write, whatever its HTTP verb.
 const PRIVILEGED_SCOPE_RE =
   /\/auth\/(admin\.directory|admin\.datatransfer|cloud-identity|apps\.licensing|apps\.order|apps\.groups\.settings|apps\.groups\.migration|ediscovery|script\.projects|script\.deployments)/;
 

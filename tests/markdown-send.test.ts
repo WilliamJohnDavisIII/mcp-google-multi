@@ -37,7 +37,7 @@ describe('renderMarkdown', () => {
     const raw = await composeRaw({ from: 'm@x', to: 'a@y', subject: 'S', text: src, html: renderMarkdown(src) });
     const msg = Buffer.from(raw, 'base64url').toString('utf-8');
     expect(msg).toContain('multipart/alternative');
-    expect(msg).toContain('<strong>bold</strong>'); // html part
+    expect(msg).toContain('<strong>bold</strong>');
     // plain part carries the literal markdown source (base64-encoded in the part)
     const plainPart = msg.split('multipart/alternative')[1];
     expect(plainPart).toBeTruthy();

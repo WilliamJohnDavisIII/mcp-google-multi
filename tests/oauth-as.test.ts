@@ -13,9 +13,8 @@ import { SsrfBlockedError } from '../src/ssrf-guard.js';
 import { CIMD_MAX_IN_FLIGHT } from '../src/cimd-cache.js';
 import { z } from "zod";
 
-/** Change one character in the middle of a JWT's signature. Changing the last
- * ones can leave it intact: base64url decoding ignores the final character's
- * low bits, so about one run in a thousand would not tamper at all. */
+/** Change one character in the middle of a JWT's signature; changing the last one can leave it
+ * intact, since base64url ignores the final character's low bits (~1 run in 1,000 wouldn't tamper). */
 const tamperSig = (jwt: string): string => {
   const i = jwt.lastIndexOf('.') + 10;
   return jwt.slice(0, i) + (jwt[i] === 'A' ? 'B' : 'A') + jwt.slice(i + 1);
@@ -164,7 +163,7 @@ describe('redirectAllowed', () => {
     expect(redirectAllowed('http://127.0.0.1:5000/callback', ['http://localhost/callback'])).toBe(true); // loopback equiv
     expect(redirectAllowed('https://evil.example/cb', ['https://claude.ai/cb'])).toBe(false);
     expect(redirectAllowed('http://localhost:3118/other', ['http://localhost/callback'])).toBe(false); // path differs
-    // #1: a "127." prefix must NOT masquerade as loopback
+    // a "127." prefix must NOT masquerade as loopback
     expect(redirectAllowed('http://127.evil.com/callback', ['http://localhost/callback'])).toBe(false);
     expect(redirectAllowed('http://127.0.0.1.evil.com/callback', ['http://127.0.0.1/callback'])).toBe(false);
   });
@@ -187,12 +186,10 @@ describe('discovery metadata', () => {
 describe('happy path (legs A + B)', () => {
   it('authorize -> callback(owner) -> token -> /mcp -> refresh', async () => {
     const port = await start();
-    // /authorize -> 302 to Google with a signed state
     const authz = await req(port, 'GET', `/authorize?${authorizeQuery()}`);
     expect(authz.status).toBe(302);
     const state = stateFrom(authz.headers.location as string);
     expect(state).toBeTruthy();
-    // /callback owner_gate -> 302 back to client with a code + iss
     const cb = await req(port, 'GET', `/callback?code=owner-code&state=${encodeURIComponent(state)}`);
     expect(cb.status).toBe(302);
     const back = new URL(cb.headers.location as string);
@@ -201,18 +198,15 @@ describe('happy path (legs A + B)', () => {
     expect(back.searchParams.get('state')).toBe('client-xyz');
     const code = back.searchParams.get('code')!;
     expect(code).toBeTruthy();
-    // /token authorization_code -> access + refresh
     const tok = JSON.parse((await req(port, 'POST', '/token', form({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, code_verifier: verifier, resource: `${BASE}/mcp` }))).text);
     expect(tok.access_token).toBeTruthy();
     expect(tok.refresh_token).toBeTruthy();
-    // POST /mcp with the Bearer -> initialize works
     const init = await req(port, 'POST', '/mcp', {
       headers: { authorization: `Bearer ${tok.access_token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'c', version: '0' } } }),
     });
     expect(init.status).toBe(200);
     expect(JSON.parse(init.text).result.serverInfo.name).toBe('as-test');
-    // refresh -> a rotated token
     const ref = JSON.parse((await req(port, 'POST', '/token', form({ grant_type: 'refresh_token', refresh_token: tok.refresh_token }))).text);
     expect(ref.access_token).toBeTruthy();
     expect(ref.refresh_token).not.toBe(tok.refresh_token);
@@ -413,7 +407,6 @@ describe('negative paths (one per spec MUST)', () => {
     expect(authz.headers['content-type']).toContain('text/html');
     expect(authz.text).toContain('attacker.example');
     expect(authz.text).toContain('name="pending"');
-    // extract the pending token and approve
     const pending = authz.text.match(/name="pending" value="([^"]+)"/)![1];
     const approved = await req(port, 'POST', '/authorize', { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ pending }).toString() });
     expect(approved.status).toBe(302);
@@ -446,7 +439,7 @@ describe('negative paths (one per spec MUST)', () => {
     }
   });
 
-  // alpha.57 signed a DCR pending with flow=alias_reauth; one still inside its
+  // An earlier release signed a DCR pending with flow=alias_reauth; one still inside its
   // TTL at upgrade must not start the old unauthenticated re-auth.
   it('POST /authorize refuses a pending signed with MCP_JWT_KEY, as an earlier release signed its alias_reauth ones', async () => {
     const asked: string[] = [];
@@ -1103,9 +1096,9 @@ describe('DCR /register bounds (unbounded-store DoS guard)', () => {
     const reg = await req(port, 'POST', '/register', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['https://new.example/cb'] }) });
     expect(reg.status).toBe(201);
     const newId = JSON.parse(reg.text).client_id as string;
-    expect(registeredClients.size).toBe(DCR_MAX_CLIENTS); // did not grow past the cap
-    expect(registeredClients.has('seed-0')).toBe(false); // oldest evicted
-    expect(registeredClients.has(newId)).toBe(true); // newest present
+    expect(registeredClients.size).toBe(DCR_MAX_CLIENTS);
+    expect(registeredClients.has('seed-0')).toBe(false);
+    expect(registeredClients.has(newId)).toBe(true);
   });
 });
 

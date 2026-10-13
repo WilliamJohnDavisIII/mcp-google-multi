@@ -70,10 +70,8 @@ describe('resolveAccounts', () => {
   });
 
   it('empty registry is non-fatal at module-load severity: returns an empty set, never exits', () => {
-    // The refuse-to-start moved off module load so the bootstrap/diagnostic CLIs
-    // (doctor/reset/import/config check) can run on a fresh install. The SERVER
-    // still refuses empty via assertServerAccountsConfigured(); the dispatch
-    // reload ('throw') still raises (see the reload-safety test below).
+    // The refuse-to-start moved off module load so bootstrap/diagnostic CLIs can run on a fresh install;
+    // the SERVER still enforces it via assertServerAccountsConfigured(), and dispatch reload still throws.
     const { exit } = spyExit();
     const set = resolveAccounts({} as NodeJS.ProcessEnv, cfgPath);
     expect(set.aliases).toEqual([]);

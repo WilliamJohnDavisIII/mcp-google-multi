@@ -55,7 +55,6 @@ describe('purgeTenantTokens (only the target tenant)', () => {
     expect(res.removed.sort()).toEqual(['personal', 'work']);
     expect(res.revoked).toBe(2);
     expect(revokedTokens.sort()).toEqual(['rt-tenant-a-personal', 'rt-tenant-a-work']);
-    // tenant-a's files are gone; tenant-b is untouched
     expect(fs.readdirSync(path.join(tenantsDir(), 'tenant-a', 'tokens'))).toEqual([]);
     expect(fs.readdirSync(path.join(tenantsDir(), 'tenant-b', 'tokens'))).toEqual(['work.enc']);
   });

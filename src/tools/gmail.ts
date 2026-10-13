@@ -48,9 +48,8 @@ function decodeBody(
   const plain: string[] = [];
   const html: string[] = [];
   collectTextParts(payload, plain, html, true);
-  // Concatenating every plain leaf keeps forwarded/mixed messages whole;
-  // any plain content beats HTML because alternatives duplicate the same body.
-  // A plain leaf is returned verbatim (byte-identical to v5).
+  // Concatenating every plain leaf keeps forwarded/mixed messages whole; plain
+  // always wins over HTML since alternatives duplicate the same body.
   if (plain.length > 0) return { body: plain.join('\n\n'), bodyFormat: 'plain' };
   if (html.length > 0) {
     const joined = html.join('\n\n');
@@ -85,10 +84,8 @@ function getAttachments(payload: any): GmailAttachment[] {
   return attachments;
 }
 
-// Reply auto-fill: parse an RFC 5322 address header into lowercased
-// addr-specs (+ display names) using nodemailer's bundled addressparser, which
-// already rides the compose dep. Groups are flattened; entries without an
-// address are dropped.
+// Reply auto-fill: parse an RFC 5322 address header into lowercased addr-specs
+// using nodemailer's bundled addressparser; groups are flattened, addressless entries dropped.
 interface ParsedAddress { address: string; name: string }
 function parseAddresses(headerValue: string): ParsedAddress[] {
   if (!headerValue) return [];
@@ -103,9 +100,8 @@ function parseAddresses(headerValue: string): ParsedAddress[] {
   return out;
 }
 const normAddr = (a: string): string => a.trim().toLowerCase();
-/** Rebuild a comma-separated address header; composeRaw/MailComposer re-encodes
- * names (RFC 2047) and the compose CRLF pre-check applies, so derived recipients get
- * the same header-injection guard as caller-supplied ones. */
+/** Rebuilds a comma-separated address header; composeRaw/MailComposer re-encodes
+ * names and apply the same header-injection guard as caller-supplied recipients. */
 function formatAddresses(list: ParsedAddress[]): string {
   return list.map((a) => (a.name ? `${a.name} <${a.address}>` : a.address)).join(', ');
 }
@@ -117,10 +113,8 @@ export function deriveReplySubject(sourceSubject: string): string {
   return /^re:/i.test(s) ? s : `Re: ${s}`;
 }
 
-// The account's own-address set (primary + Gmail send-as aliases) used to
-// exclude the caller from reply-all. Send-as rarely changes, so memoize per
-// process; a stale miss only costs one extra self-copy, never a wrong send.
-// Keyed by alias AND mailbox: two contexts can share an alias name.
+// Own-address set (primary + send-as aliases) for excluding the caller from
+// reply-all; memoized per-process (a stale miss just costs one self-copy), keyed by alias+mailbox.
 const ownAddressCache = new Map<string, Promise<Set<string>>>();
 function getOwnAddresses(gmail: any, account: string, primaryEmail: string): Promise<Set<string>> {
   const key = `${account} ${normAddr(primaryEmail)}`;
@@ -134,7 +128,7 @@ function getOwnAddresses(gmail: any, account: string, primaryEmail: string): Pro
           if (entry.sendAsEmail) set.add(normAddr(entry.sendAsEmail));
         }
       } catch {
-        // insufficient_scope / 5xx: degrade to the primary alone, never block the send.
+        // insufficient_scope/5xx: degrade silently
       }
       return set;
     })();
@@ -172,7 +166,7 @@ export async function resolveReply(
     });
     headers = meta.data.payload?.headers;
   } catch {
-    // Degrade to the API id (pre-lookup behavior) rather than blocking the send.
+    // Degrade to the API id rather than blocking the send.
     return { inReplyTo: replyToMessageId, references: replyToMessageId, sourceFound: false };
   }
 
@@ -216,15 +210,11 @@ export async function resolveReply(
 }
 
 const BODY_CAP_CHARS = 50_000;
-// gmail_read_batch aggregate ceiling: a batch of up to 100 messages must never
-// blow the context window, so the summed serialized output is bounded here
-// (matches the tool's anthropic/maxResultSizeChars hint). Per-message bodies are
-// still individually capped at BODY_CAP_CHARS first.
+// gmail_read_batch aggregate ceiling: bounds the summed serialized output so a
+// 100-message batch can't blow the context window (per-message bodies are capped at BODY_CAP_CHARS first).
 const BATCH_MAX_RESULT_CHARS = 100_000;
-// Gmail's messages.send raw/JSON path rejects messages near ~25 MB (the wire
-// message is base64-encoded, ~+33% over the raw bytes), so cap the ESTIMATED
-// ENCODED total there rather than the spec's nominal 35 MB raw (a 35 MB raw
-// payload is ~47 MB on the wire and Gmail 400s it).
+// messages.send rejects near ~25MB on the wire (base64 adds ~33%), so cap the
+// estimated ENCODED total here rather than the nominal 35MB raw limit, which 400s at ~47MB wire.
 const GMAIL_MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
 const estimateEncoded = (rawBytes: number) => Math.ceil((rawBytes * 4) / 3);
 
@@ -242,10 +232,8 @@ const attachmentSchema = z
 /** Reads attachment files into buffers (THIS server reads them, never
  * MailComposer), enforces absolute-path + total-size guards, and derives the
  * MIME filename via basename so a caller name can't inject path separators. */
-// Deny reading anything inside the server's own secret dirs — mailing out
-// master.key / <alias>.enc / mcp-jwt.key would be a full-account-takeover
-// exfil channel (this same server also reads untrusted mail/drive content, so
-// a prompt-injected attach path is a real confused-deputy vector).
+// Deny reading inside the server's own secret dirs; mailing out master.key /
+// <alias>.enc / mcp-jwt.key would be account takeover (also guards against a prompt-injected attach path).
 function isInside(dir: string, target: string): boolean {
   let d = path.resolve(dir);
   let t = path.resolve(target);
@@ -321,9 +309,8 @@ export async function readAttachments(
   return out;
 }
 
-/** Tagged compose-time failure; the handlers map it to an isError envelope.
- * `category` is the taxonomy error field (default validation_error); reply
- * auto-fill raises it as not_found when a source message can't be fetched. */
+/** Tagged compose-time failure mapped to an isError envelope; `category`
+ * defaults to validation_error (reply auto-fill raises not_found instead). */
 class GmailComposeError extends Error {
   constructor(public slug: string, message: string, public category: string = 'validation_error') {
     super(message);
@@ -434,9 +421,8 @@ export async function readBatch(
     }
   }
 
-  // Aggregate guard: walk in order, accumulating serialized size. Once the
-  // running total would exceed the maxResultSizeChars budget, cap this and every
-  // later success body so a big batch never blows the context window.
+  // Aggregate guard: walk in order accumulating serialized size; once the running
+  // total would exceed the budget, cap this and every later success body so the batch never blows the context window.
   let running = 0;
   let truncatedAny = false;
   let exhausted = false;
@@ -489,9 +475,8 @@ export function compactMessageRow(m: GmailMessageHeader): { id: string; from: st
 }
 
 export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps = {}): void {
-  // Per-registry, LIVE account enum + injectable client: the
-  // schema follows the registry's account view at parse time, and the
-  // custody path is the context's, not the process global.
+  // Per-registry, live account enum + injectable client: the schema follows
+  // the registry's account view at parse time, not a process-global default.
   const accountEnum = accountArgLive(() => server.accountAliases()).optional();
   const getClientFn = deps.getClientFn ?? getClient;
   const localFiles = deps.localFiles ?? true;
@@ -559,9 +544,8 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
           }
         }
 
-        // Search is a pick-one-message step ~always followed by gmail_read;
-        // the compact row is the selection signal, the rest was measured burn
-        // (p90 14.4k chars per call). full=true restores the pre-6.0 shape.
+        // Search is a pick-one-message step almost always followed by gmail_read;
+        // the compact row is the selection signal (full=true returns the previous, heavier row).
         const rows = full === true ? results : results.map(compactMessageRow);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(rows, null, 2) }],

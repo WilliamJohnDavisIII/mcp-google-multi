@@ -12,8 +12,8 @@ const hintOf = (tool: typeof TRASH | typeof SEND, p: Policy) =>
   JSON.parse(writeDisabledResult(tool, p).content[0].text).hint as string;
 
 describe('the hint never proposes the setting that just refused', () => {
-  // The bug: a delete refused under safe-writes was told to "Enable via
-  // GOOGLE_PROFILE=safe-writes|full-writes". Following that changes nothing.
+  // A delete refused under safe-writes was once told to "Enable via
+  // GOOGLE_PROFILE=safe-writes|full-writes"; following that changes nothing.
   it('does not offer the current profile back to the caller', () => {
     const h = hintOf(TRASH, policy({ profile: 'safe-writes' }));
     expect(h).toContain('full-writes');

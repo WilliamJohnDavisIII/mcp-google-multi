@@ -147,9 +147,8 @@ function dedupeCandidates(list: ResolveCandidate[]): ResolveCandidate[] {
 }
 
 export function registerContactsTools(server: ToolRegistry, deps: CuratedToolDeps = {}): void {
-  // Per-registry, LIVE account enum + injectable client: the
-  // schema follows the registry's account view at parse time, and the
-  // custody path is the context's, not the process global.
+  // Per-registry, live account enum + injectable client: the schema follows
+  // the registry's account view at parse time, not a process-global default.
   const accountEnum = accountArgLive(() => server.accountAliases()).optional();
   const getClientFn = deps.getClientFn ?? getClient;
   server.registerTool(
@@ -233,7 +232,7 @@ export function registerContactsTools(server: ToolRegistry, deps: CuratedToolDep
             });
             candidates.push(...(other.data.results ?? []).map((r: any) => toCandidate(r.person, 'otherContacts')));
           } catch {
-            // otherContacts unavailable (scope/5xx): degrade to saved-contacts only.
+            // otherContacts unavailable: degrade silently
           }
         }
 
@@ -530,8 +529,8 @@ export function registerContactsTools(server: ToolRegistry, deps: CuratedToolDep
         const members: unknown[] = [];
         let fetchFailures = 0;
         let firstError: unknown;
-        // getBatchGet caps at 200 names while maxMembers goes to 1000, so a
-        // large group used to fail outright rather than come back in pages.
+        // getBatchGet caps at 200 names while maxMembers goes to 1000, so fetch
+        // in chunks rather than fail outright on a large group.
         for (let i = 0; i < memberResourceNames.length; i += BATCH_GET_LIMIT) {
           const chunk = memberResourceNames.slice(i, i + BATCH_GET_LIMIT);
           try {

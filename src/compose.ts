@@ -1,8 +1,5 @@
-// Registry composition, extracted from index.ts so the tenancy module
-// (and tests) can build registries without touching the CLI entrypoint. This
-// module must stay free of import-time side effects of its own: no argv
-// parsing, no process.exit, no prints (accounts.js module-load resolution is
-// the one inherited, pre-existing exception on the import chain).
+// Registry composition, extracted from index.ts so tests can build registries
+// without touching the CLI entrypoint. No import-time side effects of its own.
 
 import { McpServer } from "@modelcontextprotocol/server";
 import { GENERATED_SERVICES } from './tools/generated/index.js';
@@ -37,13 +34,9 @@ export function createMcpServer(version: string, opts: McpServerOptions = {}): M
 
 export function buildRegistry(server: McpServer, ctx: IdentityContext, mode?: DiscoveryMode, metrics: Metrics | null = null): ToolRegistry {
   const policy = ctx.policy;
-  // The registry's account view IS the context's: fan-out expansion,
-  // selector validation and default-account injection all follow this
-  // context, not the process global (identical for the free core's one ctx).
+  // The registry's account view IS the context's, not the process global.
   const registry = new ToolRegistry(server, policy, mode, metrics, () => ctx.accounts);
-  // Every handler resolves its client, token reads and scope hints through
-  // this context; ctx.accounts is read per call, never snapshotted here, so
-  // the owner's live getter stays live.
+  // ctx.accounts is read per call, never snapshotted here, so a live getter stays live.
   const owner = isOwnerContext(ctx);
   const clientDeps: CuratedToolDeps = { getClientFn: ctx.getClient, localFiles: owner };
   const execDeps: ExecuteDeps = {

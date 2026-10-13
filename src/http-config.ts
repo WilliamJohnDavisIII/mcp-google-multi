@@ -1,8 +1,5 @@
-// Transport selection + public-base-URL / Origin / host config plumbing.
-// Pure, resolved once at boot; consumed by the HTTP host and the AS metadata.
-// Owns the canonicalization rule: a single mismatch
-// between the advertised resource URI and the client's `resource`/`aud` = a
-// perpetual 401 loop (the #1 interop bug), so it is normalized exactly once.
+// Transport + public-base-URL / Origin / host config, pure and resolved once
+// at boot. A mismatch between the advertised URI and the client's `aud` is a perpetual 401 loop.
 
 export type Transport = 'stdio' | 'http' | 'both';
 

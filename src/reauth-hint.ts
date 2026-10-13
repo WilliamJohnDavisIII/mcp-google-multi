@@ -1,8 +1,5 @@
-// In-call re-auth: a dead/missing per-account Google token is a leg-C
-// (per-alias Google token) failure. Over stdio the fix is the `auth --account`
-// CLI; over HTTP the user cannot run a CLI, so the hint becomes a clickable, server-signed link
-// into the AS's clientless alias_reauth flow (AuthServer.reauthLink). The HTTP
-// bootstrap installs the linker when the AS starts; stdio never does.
+// Over stdio the fix is the `auth --account` CLI; over HTTP it's a clickable,
+// server-signed link instead, installed by the AS bootstrap. See docs/internals.md.
 
 import { hints } from './hint-provider.js';
 

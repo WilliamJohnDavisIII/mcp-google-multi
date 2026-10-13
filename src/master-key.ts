@@ -26,10 +26,8 @@ export interface KeyDeps {
   hasAnyToken?: () => boolean;
 }
 
-// The keychain is a native optionalDependency: load lazily and synchronously
-// (createRequire — the token store's key read is sync), and treat EVERY
-// failure (no prebuild, native load error, headless Linux without a Secret
-// Service) as "keychain unavailable", falling through to the 0600 file.
+// Native optionalDependency, loaded lazily and synchronously (the token
+// store's key read is sync); EVERY failure falls through to the 0600 file.
 const require_ = createRequire(import.meta.url);
 
 function systemKeychain(account: string): KeychainEntry | null {
@@ -59,8 +57,7 @@ function systemKeychain(account: string): KeychainEntry | null {
 }
 
 // Default keychain factory, replaceable ONLY for tests: unit tests must never
-// read or write the developer's real OS keyring (the env->keychain mirror once leaked a
-// test fixture key into a real GNOME keyring — never again).
+// read or write the developer's real OS keyring.
 let keychainFactory: (account: string) => KeychainEntry | null = systemKeychain;
 
 export function __setKeychainFactoryForTest(fn: ((account: string) => KeychainEntry | null) | null): void {
@@ -75,14 +72,8 @@ function anyEncFileUnder(dir: string): boolean {
   }
 }
 
-// Glob the token dir instead of iterating registered aliases: an orphan .enc
-// (alias removed from the registry, or a partial GOOGLE_ACCOUNTS override in
-// one client) must still stop a fresh key from being minted. TOKEN_STORE_PATH
-// may relocate the token dir outside configDir(), so scan it directly; the
-// recursive configDir() walk then covers BOTH the tenant-namespaced token root
-// (tenants/<id>) AND any top-level master-key-encrypted registry beside it
-// (e.g. a downstream tenant map / invite store). Minting a fresh MASTER_KEY
-// over any existing .enc bricks it irreversibly, so the scan must see them all.
+// Globs the token dir rather than iterating registered aliases, so an orphan
+// .enc still stops a fresh key from being minted. See docs/internals.md.
 function anyTokenFileExists(): boolean {
   return anyEncFileUnder(getTokenDir()) || anyEncFileUnder(configDir());
 }
@@ -156,10 +147,8 @@ function resolveKey(
       // Exactly randomBytes(32) base64: hits deriveKey's 32-byte fast path.
       const generated = randomBytes(32).toString('base64');
 
-      // The 0600 file is ALWAYS written: on Linux the "keychain" can be the
-      // kernel keyutils keyring, which does not survive a reboot — a key that
-      // lives only there bricks every token at the next boot. The file is the
-      // durable sink; byte-exact read-back gates any use of the key.
+      // The 0600 file is ALWAYS written (some keychain backends don't survive
+      // a reboot); byte-exact read-back gates any use of the key.
       atomicWriteFileSync(filePath, `${generated}\n`, 0o600);
       if (readKeyFile(filePath) !== generated) {
         fail(

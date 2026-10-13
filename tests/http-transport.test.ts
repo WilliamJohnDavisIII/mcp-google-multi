@@ -200,7 +200,7 @@ describe('HttpTransportHost (stateless dispatch)', () => {
   });
 
   it('defaults the stamped sub to owner when the authenticator carries none', async () => {
-    const port = await startHost(); // default authenticator returns a bare {ok: true}
+    const port = await startHost();
     await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT }, body: initBody });
     const res = await request(port, 'POST', '/mcp', {
       headers: { accept: MCP_ACCEPT },
@@ -398,7 +398,7 @@ describe('HttpTransportHost (stateless dispatch)', () => {
     const slowP = callWork('slow');
     const fastP = callWork('fast');
     const first = await Promise.race([slowP, fastP]);
-    // under the old single global lock, fast would queue behind slow
+    // with a single global lock, fast would queue behind slow
     expect(first.sub).toBe('fast');
     const [slow] = await Promise.all([slowP]);
     expect(JSON.parse(slow.r.text).result.content[0].text).toBe('SLOW');
@@ -758,9 +758,8 @@ describe('HttpTransportHost resolveServer refusal', () => {
       called = true;
       return { content: [{ type: 'text' as const, text: 'x' }] };
     });
-    // red by mutation: a resolveServer whose RETURN carries both 'refused' and
-    // a usable 'server' would prove the refusal path never falls through to
-    // treat any truthy return as a dispatchable target.
+    // Mutation check: a return carrying both 'refused' and a usable 'server' proves refusal
+    // never falls through to treat any truthy return as a dispatchable target.
     const port = await refusalHost(() => ({
       server: marker,
       refused: { error: 'tenant_suspended', message: 'suspended' },
@@ -769,10 +768,8 @@ describe('HttpTransportHost resolveServer refusal', () => {
     expect(res.status).toBe(403);
     expect(called).toBe(false);
 
-    // initialize alone never calls a tool on a real dispatched server either,
-    // so the assertion above holds even if dispatch happened; send an actual
-    // tools/call for the marker tool, which WOULD set called=true if the
-    // refusal ever fell through to the resolved server.
+    // initialize alone wouldn't call a tool even if dispatch happened, so send an actual
+    // tools/call: it would set called=true if the refusal ever fell through to the resolved server.
     const callBody = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'tag', arguments: {} } };
     const callRes = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: callBody });
     expect(callRes.status).toBe(403);
