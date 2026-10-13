@@ -1292,7 +1292,7 @@ const A1_CELL_RE = /^([A-Za-z]+)?(\d+)?$/;
 
 // Either side of ':', and either half of a side, may be omitted: whole column, row or sheet.
 export function parseA1Range(a1: string): GridRangeIndexes & { sheetName: string } {
-  const bang = a1.indexOf('!');
+  const bang = a1.lastIndexOf('!');
   const sheetPart = bang === -1 ? a1 : a1.slice(0, bang);
   const rangePart = bang === -1 ? '' : a1.slice(bang + 1);
   const sheetName = sheetPart.startsWith("'") && sheetPart.endsWith("'")

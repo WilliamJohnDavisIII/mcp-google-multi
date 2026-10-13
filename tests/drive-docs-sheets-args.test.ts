@@ -314,3 +314,16 @@ describe('docs_replace_text with empty replacements array', () => {
   });
 });
 
+describe('parseA1Range with sheet title containing exclamation mark', () => {
+  it("parses \"'Q1!Plan'!A1:B2\" correctly with sheet name Q1!Plan", async () => {
+    const { parseA1Range } = await import('../src/tools/sheets.js');
+    expect(parseA1Range("'Q1!Plan'!A1:B2")).toEqual({
+      sheetName: 'Q1!Plan',
+      startColumnIndex: 0,
+      endColumnIndex: 2,
+      startRowIndex: 0,
+      endRowIndex: 2,
+    });
+  });
+});
+
