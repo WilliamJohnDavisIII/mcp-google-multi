@@ -748,7 +748,7 @@ export class RefreshStore {
   private concurrentDuplicate(r1: R1Token, f: FamilyRecord, nowMs: number, fingerprint: string | undefined, key: Buffer): { token: string } | null {
     if (fingerprint === undefined || f.by === undefined) return null;
     if (r1.gen !== f.gen - 1) return null;
-    if (nowMs - f.usedAt > REPLAY_WINDOW_MS) return null;
+    if (nowMs < f.usedAt || nowMs - f.usedAt > REPLAY_WINDOW_MS) return null;
     if (!timingSafeStringEqual(fingerprint, f.by)) return null;
     const succ = mintR1Successor(key, r1.body);
     if (!timingSafeEqual(succ.digest, Buffer.from(f.cur, 'base64url'))) return null;
@@ -767,10 +767,12 @@ export class RefreshStore {
    *
    * `fingerprint` (optional) names the presenting client (clientFingerprint).
    * Absent: a rotated-away token is always reuse, as before. Present: a
-   * token exactly one generation behind, from the same fingerprint, inside
-   * REPLAY_WINDOW_MS of the rotation that retired it, is a concurrent
-   * duplicate: it gets back the SAME successor token, with no change to the
-   * family (not even `usedAt`). Anything else rotated-away is still reuse. */
+   * token exactly one generation behind, from the same fingerprint, presented
+   * no earlier than and at most REPLAY_WINDOW_MS after the rotation that
+   * retired it, is a concurrent duplicate: it gets back the SAME successor
+   * token, with no change to the family (not even `usedAt`). Anything else
+   * rotated-away is still reuse — including a clock that has stepped back
+   * past `usedAt`, which cannot be told apart from a genuinely stale replay. */
   rotate(oldToken: string, nowMs: number, accept?: (sub: string) => boolean, fingerprint?: string): { token: string; sub: string } | null {
     const key = this.key();
     const r1 = parseR1(oldToken, key);

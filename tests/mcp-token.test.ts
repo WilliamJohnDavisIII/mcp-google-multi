@@ -595,6 +595,21 @@ describe('RefreshStore concurrent-duplicate replay', () => {
     expect(onDisk(file, KEY).families).toEqual({});
   });
 
+  it('a clock stepped back before usedAt is reuse, however close, not a duplicate at any distance', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    s.rotate(t0, 50_000, undefined, 'fp-a');
+    // 1 ms before usedAt (50_000): still within REPLAY_WINDOW_MS of it by distance alone.
+    expect(s.rotate(t0, 49_999, undefined, 'fp-a')).toBeNull();
+    expect(onDisk(file, KEY).families).toEqual({});
+
+    const { s: s2 } = storeAt();
+    const t1 = s2.issue(1000, 'owner', 'fp-a');
+    s2.rotate(t1, 50_000, undefined, 'fp-a');
+    // Far enough back that a sign bug (nowMs - usedAt wrapping negative, still <= the window) would also accept it.
+    expect(s2.rotate(t1, 0, undefined, 'fp-a')).toBeNull();
+  });
+
   it('a token two generations behind is reuse even inside the window with a matching fingerprint', () => {
     const { s, file } = storeAt();
     const t = chain(s, s.issue(1000, 'owner', 'fp-a'), 2, 'fp-a');
