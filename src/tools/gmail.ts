@@ -504,7 +504,7 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
         'pass full=true for threadId, to, labelIds and the untruncated snippet.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        query: z.string().describe('Gmail search syntax, e.g. "from:monaam is:unread"'),
+        query: z.string().describe('Gmail search syntax, e.g. "from:alice is:unread"'),
         maxResults: coerceNumber(z.number().min(1).max(100)).optional()
           .describe('Max results to return (default: 20, max: 100)'),
         full: coerceBoolean.optional().describe('Return the full row shape instead of the compact default'),
