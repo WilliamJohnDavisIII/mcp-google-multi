@@ -42,7 +42,8 @@ Each account can point at a named **scope profile** so consent is exactly what t
 - A missing `scopeProfile` means the built-in `base` profile (base scopes only). `admin: true` on a profile equals including the `admin` bundle.
 - Services register for the **union** of every account's bundles; authorization stays per account at call time (an account without the bundle gets a scope error with a re-auth hint, not silent access).
 - Changing a profile changes that account's consent set — re-run `auth --account <alias>` for it.
-- An unknown bundle name fails startup with `E_UNKNOWN_BUNDLE` and a did-you-mean suggestion (v5 silently ignored typos).
+- An unknown bundle name fails startup with `E_UNKNOWN_BUNDLE` and a did-you-mean suggestion.
+- `"includesBase": false` on a profile drops the base scopes (advanced; a profile that resolves to zero scopes fails `E_CONFIG_INVALID`).
 - `GOOGLE_OPTIONAL_SCOPES` still works as a legacy global override applied to every account (warns `E_LEGACY_GLOBAL_SCOPES`; `migrate-config` folds it into an explicit `legacy-global` profile).
 
 ### Bundle catalog
@@ -77,25 +78,27 @@ Each account can point at a named **scope profile** so consent is exactly what t
 | Env var | Required | Description |
 |---|---|---|
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | ✓ | OAuth **Desktop** client from Google Cloud — see [Google Cloud setup](./google-cloud-setup.md) |
-| `GOOGLE_ACCOUNTS` | ✓ | `alias:email,…` — e.g. `work:you@co.com,personal:you@gmail.com` |
-| `GOOGLE_DEFAULT_ACCOUNT` | | Alias used when a tool call omits `account` (or set `"defaultAccount"` in config.json; env wins; note: while `GOOGLE_ACCOUNTS` is set, the whole registry — including the default — comes from env, so the config field is inert). Unset = `account` stays required per call (`E_NO_DEFAULT_ACCOUNT` hint on omission). Explicit aliases, `*` and CSV are never affected |
-| `GOOGLE_DISCOVERY` | | Tool-surface visibility: `lazy` (default — meta-tools only until `{service}_discover`), `curated` (~200 curated tools advertised eagerly), `eager` (everything). At runtime an agent can `discover_all` / `discover_reset` to expand/collapse a lazy surface without config changes |
-| `MASTER_KEY` | | encrypts the token store. Optional since v6: auto-provisioned as env > OS keychain > `master.key` (0600) > generated-on-setup. Keep it in env for deployments that may downgrade or move hosts. Never regenerated while encrypted tokens exist (`E_MASTER_KEY_MISSING_TOKENS_EXIST`) |
-| `GOOGLE_PROFILE` | — | write policy: `read-only` (default) · `safe-writes` · `full-writes` |
-| `GOOGLE_READ_ONLY` | — | `true` = hard kill-switch for all writes |
+| `GOOGLE_ACCOUNTS` | — | `alias:email,…` — e.g. `work:you@co.com,personal:you@gmail.com`. When set and non-empty it replaces the `config.json` registry; one of the two must define at least one account |
+| `GOOGLE_DEFAULT_ACCOUNT` | | Alias used when a tool call omits `account` (or set `"defaultAccount"` in config.json; env wins; note: while `GOOGLE_ACCOUNTS` is set, the whole registry — including the default — comes from env, so the config field is inert). Unset = `account` stays required per call (`E_NO_DEFAULT_ACCOUNT` hint on omission). An alias that is not configured fails startup with `E_DEFAULT_ACCOUNT_UNKNOWN`. Explicit aliases, `*` and CSV are never affected |
+| `GOOGLE_DISCOVERY` | | Tool-surface visibility: `lazy` (default — meta-tools only until `{service}_discover`), `curated` (all 188 curated tools advertised eagerly), `eager` (everything). An invalid value warns and falls back to `lazy`; over HTTP the mode is always `curated`. At runtime an agent can `discover_all` / `discover_reset` to expand/collapse a lazy surface without config changes |
+| `MASTER_KEY` | | encrypts the token store. Optional: resolved as env > OS keychain > `master.key` (0600, in the config dir) > generated on first use. Keep it in env for deployments that may downgrade or move hosts. Never regenerated while encrypted tokens exist (`E_MASTER_KEY_MISSING_TOKENS_EXIST`) |
+| `GOOGLE_PROFILE` | — | write policy: `read-only` (default) · `safe-writes` · `full-writes`; an invalid value warns and falls back to `read-only` |
+| `GOOGLE_READ_ONLY` | — | `true` (or `1`/`yes`) = hard kill-switch for all writes |
 | `GOOGLE_WRITE_ALLOW` / `GOOGLE_WRITE_DENY` | — | glob overrides, e.g. `calendar:*`, `*:delete*` (deny wins) |
-| `GOOGLE_OPTIONAL_SCOPES` | — | opt-in scope bundles, CSV — see [bundles](#optional-scope-bundles) |
-| `GOOGLE_ADMIN_ACCOUNTS` | — | aliases granted Workspace-admin scopes (the account's own super-admin OAuth) |
-| `GOOGLE_TOOLSETS` | — | `all` (default) or a CSV filter of service names — see [services](#services) |
+| `GOOGLE_OPTIONAL_SCOPES` | — | legacy: CSV of scope bundles applied to every account (warns `E_LEGACY_GLOBAL_SCOPES`; prefer [scope profiles](#scope-profiles-per-account-consent)) — see [bundles](#optional-scope-bundles) |
+| `GOOGLE_ADMIN_ACCOUNTS` | — | aliases granted Workspace-admin scopes (the account's own super-admin OAuth); when set, overrides per-account `admin` flags |
+| `GOOGLE_TOOLSETS` | — | `all` (default) or a CSV filter of service names; unknown names warn and are ignored — see [services](#services) |
 | `TOKEN_STORE_PATH` | — | override the encrypted token dir (default: `$XDG_CONFIG_HOME/mcp-google-multi/tokens`, falling back to `~/.config/mcp-google-multi/tokens`) |
 | `DISCOVERY_CACHE_PATH` | — | override the Discovery-doc cache dir (default: `$XDG_CONFIG_HOME/mcp-google-multi/discovery`, falling back to `~/.config/mcp-google-multi/discovery`) |
-| `GOOGLE_ARG_UNKNOWN` | `reject` | what to do with a `tools/call` argument the tool does not declare: `reject` (default) refuses the call with a typed `unknown_argument` error naming the likely intended parameter, `warn` logs it to stderr and drops it as 5.x did, `off` restores the silent 5.x drop with no log. A bad value falls back to `warn`, not to the default. Never screened: keys starting with `_`, keys containing `/`, the client artifacts `random_string`/`toolCallId`/`tool_call_id`/`tool_call_description`, tools that declare no arguments, and a key whose declared twin the same call also sent |
-| `GOOGLE_OUTBOUND_ALLOWLIST` | off | opt-in outbound target allowlist for unattended deployments: comma-separated addresses and `@domain` suffixes gating Gmail recipients, Calendar attendees and Drive grantees (curated tools, generated tools and the escape hatch; uninspectable raw-compose methods and `anyone` link shares are refused while active). Blocked calls fail with `recipient_not_allowed` and a hint |
+| `GOOGLE_ARG_UNKNOWN` | `reject` | what to do with a `tools/call` argument the tool does not declare: `reject` (default) refuses the call with a typed `unknown_argument` error naming the likely intended parameter, `warn` logs it to stderr and drops it, `off` drops it silently. A bad value falls back to `warn`, not to the default. Never screened: keys starting with `_`, keys containing `/`, the client artifacts `random_string`/`toolCallId`/`tool_call_id`/`tool_call_description`, tools that declare no arguments, and a key whose declared twin the same call also sent |
+| `GOOGLE_OUTBOUND_ALLOWLIST` | off | opt-in outbound target allowlist for unattended deployments: comma-separated addresses and `@domain` suffixes gating Gmail recipients, Calendar attendees and Drive grantees (curated tools, generated tools and the escape hatch; while active, uninspectable raw-compose methods and `drive_share` `anyone` link shares are refused). Blocked calls fail with `recipient_not_allowed` and a hint |
 | `GOOGLE_USAGE_METRICS` | off | local usage metrics: `on\|1\|true\|yes` enables, `off\|0\|false\|no` disables; any other value warns and stays OFF; wins over the `usageMetrics` config key. See [usage-metrics.md](./usage-metrics.md) |
 | `usageMetrics` (config.json) | absent = off | same switch as a config key; remove it before downgrading below 6.0 (strict schema) |
 | `USAGE_METRICS_PATH` | — | override the metrics dir (default: `$XDG_STATE_HOME/mcp-google-multi/metrics`, falling back to `~/.local/state/mcp-google-multi/metrics`); setting the path alone enables nothing |
 | `GOOGLE_TRIM` | — | `off` (or `0`/`false`/`no`) disables compact JSON serialization of tool responses |
 | `GOOGLE_ARG_NORMALIZE` | — | `off` (or `0`/`false`/`no`) disables tools/call argument-key normalization (snake_case → declared camelCase when unambiguous; each rename logs one line to stderr) |
+| `MCP_GOOGLE_MULTI_ENV` | — | absolute path of the one `.env` file to load instead of searching (see top of page) |
+| `MCP_TRANSFER_PASSPHRASE` | — | passphrase for `account export` / `account import`; unset = prompt on a TTY |
 
 Inspect the resolved setup any time: `mcp-google-multi config check`.
 
@@ -106,13 +109,14 @@ By default the server speaks **stdio** (`MCP_TRANSPORT=stdio`), the zero-network
 | Variable | Default | Notes |
 |---|---|---|
 | `MCP_TRANSPORT` | `stdio` | `stdio`, `http`, or `both` |
-| `MCP_HTTP_HOST` | `127.0.0.1` | bind address (loopback) |
+| `MCP_HTTP_HOST` | `127.0.0.1` | bind address |
 | `MCP_HTTP_PORT` | `4243` | bind port |
 | `MCP_PUBLIC_URL` | `http://<host>:<port>` | the canonical public base URL; `${MCP_PUBLIC_URL}/mcp` is the endpoint clients connect to |
 | `MCP_OWNER_EMAILS` | *(required for http)* | CSV of Google emails allowed to authenticate; the server refuses to start HTTP without it |
 | `MCP_ALLOWED_ORIGINS` | — | extra Origins to allow beyond `MCP_PUBLIC_URL` and `https://claude.ai` |
 | `MCP_CIMD_ALLOWED_ISSUERS` | `claude.ai` | CSV host allowlist for OAuth client-metadata documents |
 | `MCP_ACCESS_TTL` | `600` | MCP access-token lifetime (seconds) |
+| `MCP_JWT_KEY` | auto | signing key for the server's own MCP tokens; resolved like `MASTER_KEY` (env > OS keychain > `mcp-jwt.key` file > generated). Regenerating it only signs clients out |
 
 Over HTTP the server is its own **OAuth 2.1 authorization server**: Claude Code and the claude.ai connector authenticate with zero custom UI. A client that connects to `${MCP_PUBLIC_URL}/mcp` is sent through Google login; only an email in `MCP_OWNER_EMAILS` is admitted (the owner gate), and the server then mints its own audience-bound token for the client — your Google tokens are never handed to the client, and the client's token is never sent to Google. Behind a Cloudflare named tunnel, keep the bind on loopback and set `MCP_PUBLIC_URL` to the public HTTPS host; add `${MCP_PUBLIC_URL}/callback` as an authorized redirect URI in your Google Cloud console. Register the URL with a local client via `mcp-google-multi write-client-config --url ${MCP_PUBLIC_URL}/mcp`. Full remote-HTTP walkthrough — named tunnel, Docker, and one-click Render/Railway deploys — is in [docs/http-setup.md](./http-setup.md).
 
@@ -123,14 +127,15 @@ A distroless, non-root image is provided (`Dockerfile`). Build and run it, passi
 ```sh
 docker build -t mcp-google-multi .
 docker run --init --rm \
+  -e GOOGLE_CLIENT_ID -e GOOGLE_CLIENT_SECRET \
   -e GOOGLE_ACCOUNTS="work:me@company.example,personal:me@gmail.example" \
-  -e MASTER_KEY="$(openssl rand -base64 32)" \
+  -e MASTER_KEY \
   -e MCP_OWNER_EMAILS="me@company.example" \
   -v mcp-config:/home/nonroot/.config/mcp-google-multi \
   mcp-google-multi
 ```
 
-`--init` forwards SIGTERM for a clean shutdown. Persist the config volume across restarts — the OS keychain is unavailable in distroless, so `MASTER_KEY` falls back to a `0600` file there and a regenerated key would brick existing tokens. The image defaults to `MCP_TRANSPORT=http` bound to loopback; the full tunnel/remote recipe (including `cloudflared` + compose wiring and the Render/Railway deploy buttons) is in [docs/http-setup.md](./http-setup.md).
+`-e NAME` with no value passes the variable through from your shell; set `MASTER_KEY` once (e.g. `openssl rand -base64 32`) and keep reusing it. `--init` forwards SIGTERM for a clean shutdown. Persist the config volume across restarts — the OS keychain is unavailable in distroless, so without `MASTER_KEY` in env the key is generated into a `0600` file on that volume, and a regenerated key would brick existing tokens. The image defaults to `MCP_TRANSPORT=http` bound to loopback; the full tunnel/remote recipe (including `cloudflared` + compose wiring and the Render/Railway deploy buttons) is in [docs/http-setup.md](./http-setup.md).
 
 ## Write-control (deny-by-default)
 
@@ -142,7 +147,7 @@ Reads are never gated. **Every create/update/delete is off until you opt in** �
 | `safe-writes` | create + update on your own data (deletes and privileged writes blocked) |
 | `full-writes` | everything |
 
-`GOOGLE_READ_ONLY=true` overrides all. For fine control: `GOOGLE_WRITE_ALLOW="calendar:*, sheets:update*"` and `GOOGLE_WRITE_DENY="*:delete*"` (deny wins). The policy applies identically to curated tools, generated tools, and the escape hatch.
+`GOOGLE_READ_ONLY=true` overrides all; an invalid `GOOGLE_PROFILE` falls back to `read-only`. For fine control: `GOOGLE_WRITE_ALLOW="calendar:*, sheets:update*"` and `GOOGLE_WRITE_DENY="*:delete*"` (deny wins). The policy applies identically to curated tools, generated tools, and the escape hatch.
 
 ### What `safe-writes` refuses beyond deletes
 
@@ -167,7 +172,7 @@ Optional services register when their bundle is enabled (below): `slides`, `form
 
 ## Optional scope bundles
 
-Add bundle names to `GOOGLE_OPTIONAL_SCOPES` (CSV), then re-run `auth` for each account so the new scopes are granted:
+Add bundle names to an account's [scope profile](#scope-profiles-per-account-consent) (or, legacy, to `GOOGLE_OPTIONAL_SCOPES` as CSV for every account), then re-run `auth --account <alias>` so the new scopes are granted:
 
 `slides`, `forms`, `chat`, `analytics`, `analytics_write`, `classroom`, `cloudidentity`, `cloudsearch`, `vault`, `keep`, `driveactivity`, `drivelabels`, `script`, `postmaster`, `groupssettings`, `groupsmigration`, `licensing`, `reseller`, `appsmarket`.
 
