@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
 import mime from 'mime-types';
 
 // drive_transfer's two-account form is the sanctioned schema exception and
@@ -22,6 +23,7 @@ import mime from 'mime-types';
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
 const FALLBACK_MAX_BYTES = 1024 * 1024 * 1024; // 1GB
+const MAX_UPLOAD_BASE64_BYTES = 10 * 1024 * 1024; // 10MB decoded
 
 const GOOGLE_WORKSPACE_TYPES = new Set([
   'application/vnd.google-apps.document',
@@ -387,26 +389,61 @@ export function registerDriveTools(server: ToolRegistry, deps: CuratedToolDeps =
 
   // ─── Write / upload / download ─────────────────────────────────────────
 
-  registerHostFileTool(
+  server.registerTool(
     'drive_upload',
     {
-      description: 'Upload a local file to Google Drive. Pass `convertTo` to import it as a native, editable Google Doc/Sheet/Slides/Drawing instead of storing the raw bytes.',
+      description: 'Upload a file to Google Drive, from inline base64 content or (when this server exposes the host filesystem) a local path. Pass `convertTo` to import it as a native, editable Google Doc/Sheet/Slides/Drawing instead of storing the raw bytes.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        localPath: z.string().min(1).describe('Absolute path of the SOURCE file on disk to upload (on the machine running the server; this is not savePath)'),
         filename: z.string().describe('Name as it appears in Drive'),
-        mimeType: z.string().optional().describe('Source MIME type of the local file (inferred from extension if omitted). With `convertTo`, this is the format Drive imports from.'),
+        contentBase64: z.string().optional().describe(`Base64-encoded file content. Exactly one of contentBase64${localFiles ? ' or localPath' : ''} is required. Decoded size is capped at ${MAX_UPLOAD_BASE64_BYTES / (1024 * 1024)} MB.`),
+        ...(localFiles
+          ? {
+              localPath: z.string().min(1).optional().describe('Absolute path of the SOURCE file on disk to upload (on the machine running the server; this is not savePath). Exactly one of contentBase64 or localPath is required.'),
+            }
+          : {}),
+        mimeType: z.string().optional().describe('Source MIME type of the content (inferred from filename if omitted). With `convertTo`, this is the format Drive imports from.'),
         convertTo: z.enum(CONVERT_TO_VALUES).optional().describe('Convert the upload into this native Google Workspace type on import: "document" | "spreadsheet" | "presentation" | "drawing" (full application/vnd.google-apps.* ids also accepted). E.g. upload .md/.html/.docx/.txt with convertTo=document to get a real Google Doc. Source must be an importable format. Omit to store the file as-is.'),
         parentFolderId: z.string().optional().describe('Parent folder ID, not parentId. Defaults to My Drive root'),
       },
     },
-    async ({ account, localPath, filename, mimeType: mimeTypeArg, convertTo, parentFolderId }) => {
+    async (args) => {
+      const { account, filename, contentBase64, mimeType: mimeTypeArg, convertTo, parentFolderId } = args;
+      // Declared only when the context may read host files (see the shape).
+      const { localPath: localPathArg } = args as { localPath?: string };
+      if (localPathArg && !localFiles) return hostFilesRefused(account, 'localPath');
+      const hasBase64 = contentBase64 !== undefined;
+      const hasLocalPath = !!localPathArg;
+      if (hasBase64 === hasLocalPath) {
+        return invalidParams(
+          account as Account,
+          `Pass exactly one of contentBase64${localFiles ? ' or localPath' : ''}.`,
+          localFiles
+            ? 'Use contentBase64 for inline content, or localPath for a file already on the machine running the server.'
+            : 'Pass contentBase64 with the file\'s base64-encoded content.',
+        );
+      }
       try {
+        let media: { mimeType: string; body: Readable };
+        if (hasBase64) {
+          const buf = Buffer.from(contentBase64!, 'base64');
+          if (buf.length > MAX_UPLOAD_BASE64_BYTES) {
+            return invalidParams(
+              account as Account,
+              `Decoded contentBase64 is ${buf.length} bytes, over the ${MAX_UPLOAD_BASE64_BYTES} byte cap.`,
+              'Upload a smaller file, or use localPath if this server exposes the host filesystem.',
+            );
+          }
+          media = { mimeType: mimeTypeArg ?? (mime.lookup(filename) || 'application/octet-stream'), body: Readable.from(buf) };
+        } else {
+          media = {
+            mimeType: mimeTypeArg ?? (mime.lookup(localPathArg!) || 'application/octet-stream'),
+            body: await openLocalReadStream(localPathArg!),
+          };
+        }
+
         const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
-
-        const resolvedMime = mimeTypeArg ?? (mime.lookup(localPath) || 'application/octet-stream');
-        const fileStream = await openLocalReadStream(localPath);
 
         const res = await drive.files.create({
           requestBody: {
@@ -415,10 +452,7 @@ export function registerDriveTools(server: ToolRegistry, deps: CuratedToolDeps =
             // Setting a google-apps target type makes Drive convert the media on import.
             ...(convertTo ? { mimeType: resolveConvertTarget(convertTo) } : {}),
           },
-          media: {
-            mimeType: resolvedMime,
-            body: fileStream,
-          },
+          media,
           fields: 'id,name,mimeType,webViewLink,size',
           supportsAllDrives: true,
         });

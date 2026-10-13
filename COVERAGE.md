@@ -761,7 +761,7 @@ Optional scope bundles: `analytics`, `analytics_write`, `appsmarket`, `chat`, `c
 | `drive_trash` | curated | delete | Move a file to Google Drive trash. Recoverable from Drive UI or via drive_untrash. |
 | `drive_untrash` | curated | update | Restore a trashed file from Google Drive trash back to its previous location. |
 | `drive_update` | curated | update | Rename, move, or replace content of a Drive file. Any combination in one call. For untrash, use drive_untrash. |
-| `drive_upload` | curated | create | Upload a local file to Google Drive. Pass `convertTo` to import it as a native, editable Google Doc/Sheet/Slides/Drawing |
+| `drive_upload` | curated | create | Upload a file to Google Drive, from inline base64 content or (when this server exposes the host filesystem) a local path |
 
 </details>
 
