@@ -108,3 +108,69 @@ describe('drive_upload contentBase64', () => {
     expect(h.requests()).toHaveLength(0);
   });
 });
+
+describe('docs_replace_text', () => {
+  const batchUpdateRespond = (counts: number[]) => (req: { data?: unknown }) => {
+    const n = (req.data as { requests?: unknown[] })?.requests?.length ?? counts.length;
+    return { documentId: 'D1', replies: Array.from({ length: n }, (_, i) => ({ replaceAllText: { occurrencesChanged: counts[i] ?? 0 } })) };
+  };
+
+  it('replaces a single pair as before', async () => {
+    const h = toolHarness({ respond: batchUpdateRespond([3]) });
+    const res = await h.call('docs_replace_text', { account: 'test', documentId: 'D1', findText: 'a', replaceText: 'b' });
+    expect(parse(res)).toEqual({ documentId: 'D1', occurrencesReplaced: 3 });
+  });
+
+  it('adds a warning when 0 occurrences were replaced (single pair)', async () => {
+    const h = toolHarness({ respond: batchUpdateRespond([0]) });
+    const res = await h.call('docs_replace_text', { account: 'test', documentId: 'D1', findText: 'nope', replaceText: 'b' });
+    expect(parse(res)).toEqual({ documentId: 'D1', occurrencesReplaced: 0, warning: expect.stringContaining('No occurrences') });
+  });
+
+  it('applies several pairs in one batchUpdate and returns per-pair counts', async () => {
+    const h = toolHarness({ respond: batchUpdateRespond([2, 0]) });
+    const res = await h.call('docs_replace_text', {
+      account: 'test',
+      documentId: 'D1',
+      replacements: [{ findText: 'a', replaceText: 'b' }, { findText: 'c', replaceText: 'd' }],
+    });
+    expect(parse(res)).toEqual({
+      documentId: 'D1',
+      replacements: [
+        { findText: 'a', replaceText: 'b', occurrencesReplaced: 2 },
+        { findText: 'c', replaceText: 'd', occurrencesReplaced: 0 },
+      ],
+    });
+    expect(h.requests()).toHaveLength(1);
+  });
+
+  it('adds a warning when every replacements pair replaced 0 occurrences', async () => {
+    const h = toolHarness({ respond: batchUpdateRespond([0, 0]) });
+    const res = await h.call('docs_replace_text', {
+      account: 'test',
+      documentId: 'D1',
+      replacements: [{ findText: 'a', replaceText: 'b' }, { findText: 'c', replaceText: 'd' }],
+    });
+    expect(parse(res).warning).toContain('No occurrences');
+  });
+
+  it('rejects when both findText/replaceText and replacements are passed', async () => {
+    const h = toolHarness();
+    const res = await h.call('docs_replace_text', {
+      account: 'test',
+      documentId: 'D1',
+      findText: 'a',
+      replaceText: 'b',
+      replacements: [{ findText: 'c', replaceText: 'd' }],
+    });
+    expect(parse(res).error).toBe('invalid_params');
+    expect(h.requests()).toHaveLength(0);
+  });
+
+  it('rejects when neither form is passed', async () => {
+    const h = toolHarness();
+    const res = await h.call('docs_replace_text', { account: 'test', documentId: 'D1' });
+    expect(parse(res).error).toBe('invalid_params');
+    expect(h.requests()).toHaveLength(0);
+  });
+});

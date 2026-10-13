@@ -416,36 +416,77 @@ export function registerDocsTools(server: ToolRegistry, deps: CuratedToolDeps = 
     {
       // Insert/append-capable or non-convergent: a retry duplicates content.
       annotations: { idempotentHint: false },
-      description: 'Find and replace all occurrences of text in a document',
+      description: 'Find and replace text in a document. Pass findText/replaceText for a single pair, or replacements for several pairs applied in one batchUpdate.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
         documentId: z.string().min(1).describe('Google Docs document ID'),
-        findText: z.string().describe('Text to search for'),
-        replaceText: z.string().describe('Replacement text'),
+        findText: z.string().optional().describe('Text to search for. Use with replaceText; exactly one of this pair or `replacements` is required.'),
+        replaceText: z.string().optional().describe('Replacement text for findText'),
         matchCase: coerceBoolean.default(true).optional()
           .describe('Case-sensitive match (default: true)'),
+        replacements: coerceJson(z.array(z.object({
+          findText: z.string(),
+          replaceText: z.string(),
+          matchCase: coerceBoolean.optional(),
+        }))).optional().describe('Several find/replace pairs applied in one batchUpdate, each returning its own count. Exactly one of this or findText/replaceText is required.'),
       },
     },
-    async ({ account, documentId, findText, replaceText, matchCase }) => {
+    async ({ account, documentId, findText, replaceText, matchCase, replacements }) => {
+      const singlePair = findText !== undefined || replaceText !== undefined;
+      if (singlePair && replacements) {
+        return invalidParams(
+          account as Account,
+          'Pass either findText/replaceText or replacements, not both.',
+          'Use findText and replaceText for one pair, or replacements for several pairs in one call.',
+        );
+      }
+      if (!singlePair && !replacements) {
+        return invalidParams(
+          account as Account,
+          'Pass findText and replaceText, or a replacements array.',
+          'Use findText and replaceText for one pair, or replacements for several pairs in one call.',
+        );
+      }
+      if (singlePair && (findText === undefined || replaceText === undefined)) {
+        return invalidParams(
+          account as Account,
+          'Both findText and replaceText are required together.',
+          'Pass both, or use replacements for several pairs.',
+        );
+      }
+      const pairs = replacements ?? [{ findText: findText!, replaceText: replaceText!, matchCase }];
       try {
         const auth = await getClientFn(account as Account);
         const docs = docsClient({ version: 'v1', auth });
         const res = await docs.documents.batchUpdate({
           documentId,
           requestBody: {
-            requests: [{
+            requests: pairs.map((p) => ({
               replaceAllText: {
-                containsText: { text: findText, matchCase: matchCase ?? true },
-                replaceText,
+                containsText: { text: p.findText, matchCase: p.matchCase ?? true },
+                replaceText: p.replaceText,
               },
-            }],
+            })),
           },
         });
-        const occurrences = (res.data.replies?.[0] as any)?.replaceAllText?.occurrencesChanged ?? 0;
+        const counts = (res.data.replies ?? []).map((r: any) => r?.replaceAllText?.occurrencesChanged ?? 0);
+        const warning = counts.every((c) => c === 0)
+          ? 'No occurrences were replaced; check spelling and matchCase.'
+          : undefined;
+        if (replacements) {
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify({
+              documentId: res.data.documentId,
+              replacements: pairs.map((p, i) => ({ findText: p.findText, replaceText: p.replaceText, occurrencesReplaced: counts[i] })),
+              ...(warning ? { warning } : {}),
+            }, null, 2) }],
+          };
+        }
         return {
           content: [{ type: 'text' as const, text: JSON.stringify({
             documentId: res.data.documentId,
-            occurrencesReplaced: occurrences,
+            occurrencesReplaced: counts[0],
+            ...(warning ? { warning } : {}),
           }, null, 2) }],
         };
       } catch (error: any) {

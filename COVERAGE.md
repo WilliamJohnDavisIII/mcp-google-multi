@@ -679,7 +679,7 @@ Optional scope bundles: `analytics`, `analytics_write`, `appsmarket`, `chat`, `c
 | `docs_modify_table` | curated | update | Mutate a table by operation: insertRow, insertColumn, deleteRow, deleteColumn, mergeCells, unmergeCells. Locate the cell |
 | `docs_read` | curated | read | Read document content as plain text with a heading index (returns up to maxChars characters per call). Pass heading or h |
 | `docs_replace_named_range_content` | curated | update | Replace the content of every named range matching the identifier with the supplied text. Real mail-merge primitive — far |
-| `docs_replace_text` | curated | update | Find and replace all occurrences of text in a document |
+| `docs_replace_text` | curated | update | Find and replace text in a document. Pass findText/replaceText for a single pair, or replacements for several pairs appl |
 | `docs_update_document_style` | curated | update | Update document-level styling (page size, margins, headers/footers behavior). Only supplied fields are applied. |
 | `docs_update_paragraph_style` | curated | update | Update paragraph styling (alignment, heading, indents, spacing) across a range. Only supplied fields are applied. |
 | `docs_update_style` | curated | update | Update text formatting (bold, italic, underline, font, size) for a range |
