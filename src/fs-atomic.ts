@@ -152,13 +152,19 @@ function probeDead(pid: number): boolean {
   }
 }
 
+// Symmetric: a clock step back must not make a write-in-progress lock look
+// permanently fresh (see docs/internals.md).
+function withinWriteGrace(now: number, mtimeMs: number): boolean {
+  return Math.abs(now - mtimeMs) < LOCK_WRITE_GRACE_MS;
+}
+
 function holderDead(holder: LockHolder, now: number): boolean {
-  if (holder.body === '' && now - holder.mtimeMs < LOCK_WRITE_GRACE_MS) return false;
+  if (holder.body === '' && withinWriteGrace(now, holder.mtimeMs)) return false;
   const pid = Number(holder.body);
   if (!(Number.isSafeInteger(pid) && pid > 0)) return true;
   // A same-pid owner file exists but is not yet bound (the fallback lock's two
   // writes race a reader); give it the same grace as an empty lock.
-  if (!holder.owner && holder.ownerPending && now - holder.mtimeMs < LOCK_WRITE_GRACE_MS) return false;
+  if (!holder.owner && holder.ownerPending && withinWriteGrace(now, holder.mtimeMs)) return false;
   const leaseOver = now - holder.mtimeMs >= LOCK_LEASE_MS;
   const owner = holder.owner;
   // No owner file: an older writer, whose namespace is unknown.

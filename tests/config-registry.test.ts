@@ -731,6 +731,14 @@ describe('fs-atomic', () => {
       expect(existsSync(lock)).toBe(true);
     });
   });
+
+  it('recovers an empty lock dated in the future, after a clock step back', () => {
+    const p = path.join(base, 'a.json');
+    const lock = lockOf(p);
+    writeFileSync(lock, '', { mode: 0o600 });
+    utimesSync(lock, new Date(Date.now() + 10_000), new Date(Date.now() + 10_000));
+    expectBroken(p);
+  });
 });
 
 describe('reload safety (dispatch path must never exit)', () => {
