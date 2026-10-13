@@ -791,6 +791,21 @@ describe('HttpTransportHost resolveServer refusal (H3 PR1)', () => {
     expect(JSON.parse(res.text).error).toBe('tenant_not_found');
   });
 
+  it('a non-string slug, a C1 control, U+2028 and U+202E each fall back to tenant_not_found (red by mutation: the old \\x00-\\x1f\\x7f-only regex)', async () => {
+    const refusals: unknown[] = [
+      { refused: { error: 42, message: 'ok message' } },
+      { refused: { error: 'tenant_unavailable', message: `bad${String.fromCharCode(0x85)}message` } },
+      { refused: { error: 'tenant_unavailable', message: 'bad message' } },
+      { refused: { error: 'tenant_unavailable', message: 'bad‮message' } },
+    ];
+    for (const refusal of refusals) {
+      const port = await refusalHost(() => refusal as never);
+      const res = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: initBody });
+      expect(res.status).toBe(403);
+      expect(JSON.parse(res.text)).toEqual({ error: 'tenant_not_found', message: 'no tenant is provisioned for this subject' });
+    }
+  });
+
   it('null and a throw both keep today\'s exact tenant_not_found body', async () => {
     const nullPort = await refusalHost(() => null);
     const nullRes = await request(nullPort, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: initBody });

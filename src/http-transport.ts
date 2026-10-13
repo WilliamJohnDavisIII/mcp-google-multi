@@ -97,16 +97,19 @@ const MAX_BATCH_FRAMES = 16;
 // the slug is always the host's own value.
 const REFUSAL_SLUG_RE = /^[a-z][a-z0-9_]{0,39}$/;
 const MAX_REFUSAL_MESSAGE_CHARS = 300;
-// eslint-disable-next-line no-control-regex -- deliberately matching control chars to reject them
-const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+// C0/C1 controls, format chars (includes bidi overrides like U+202E and
+// zero-width joiners) and the line/paragraph separators; ordinary non-ASCII
+// letters stay allowed.
+const NON_PRINTABLE_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 
-function isValidRefusal(r: { error: string; message: string }): boolean {
+function isValidRefusal(r: { error: unknown; message: unknown }): boolean {
   return (
+    typeof r.error === 'string' &&
     REFUSAL_SLUG_RE.test(r.error) &&
     typeof r.message === 'string' &&
     r.message.length > 0 &&
     r.message.length <= MAX_REFUSAL_MESSAGE_CHARS &&
-    !CONTROL_CHAR_RE.test(r.message)
+    !NON_PRINTABLE_RE.test(r.message)
   );
 }
 
