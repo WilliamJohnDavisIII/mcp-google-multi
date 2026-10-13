@@ -67,6 +67,8 @@ export function registerCalendarTools(server: ToolRegistry, deps: CuratedToolDep
       },
     },
     async ({ account, calendarId, query, timeMin, timeMax, maxResults, pageToken }) => {
+      const tzError = missingTimeZoneError('timeMin', timeMin) ?? missingTimeZoneError('timeMax', timeMax);
+      if (tzError) return invalidParams(account as Account, tzError, MISSING_TIME_ZONE_HINT);
       const rangeError = timeRangeError(timeMin, timeMax);
       if (rangeError) return invalidParams(account as Account, rangeError, TIME_RANGE_HINT);
       try {
@@ -373,6 +375,8 @@ export function registerCalendarTools(server: ToolRegistry, deps: CuratedToolDep
       },
     },
     async ({ account, calendarId, eventId, timeMin, timeMax, maxResults, pageToken }) => {
+      const tzError = missingTimeZoneError('timeMin', timeMin) ?? missingTimeZoneError('timeMax', timeMax);
+      if (tzError) return invalidParams(account as Account, tzError, MISSING_TIME_ZONE_HINT);
       const rangeError = timeRangeError(timeMin, timeMax);
       if (rangeError) return invalidParams(account as Account, rangeError, TIME_RANGE_HINT);
       try {
@@ -419,6 +423,8 @@ export function registerCalendarTools(server: ToolRegistry, deps: CuratedToolDep
             'Pass at least one calendar ID, e.g. ["primary"]. Use calendar_list_calendars to see the IDs this account can read.',
           );
         }
+        const tzError = missingTimeZoneError('timeMin', timeMin) ?? missingTimeZoneError('timeMax', timeMax);
+        if (tzError) return invalidParams(account as Account, tzError, MISSING_TIME_ZONE_HINT);
         const rangeError = timeRangeError(timeMin, timeMax);
         if (rangeError) return invalidParams(account as Account, rangeError, TIME_RANGE_HINT);
         const auth = await getClientFn(account as Account);
@@ -496,6 +502,19 @@ export function timeRangeError(timeMin: string | undefined, timeMax: string | un
 export const TIME_RANGE_HINT =
   'Swap the two values or widen the window: timeMin must be strictly earlier than timeMax. ' +
   'An empty result from this tool then always means "nothing scheduled", never "bad range".';
+
+const TZ_SUFFIX_RE = /(Z|[+-]\d{2}:?\d{2})$/;
+
+/** The Calendar API requires timeMin/timeMax as RFC3339 with a mandatory
+ * offset; a bare local datetime is silently ambiguous rather than rejected,
+ * so catch it here with a message that names the field. */
+export function missingTimeZoneError(field: 'timeMin' | 'timeMax', value: string | undefined): string | null {
+  if (value === undefined || TZ_SUFFIX_RE.test(value)) return null;
+  return `${field} ("${value}") has no "Z" or UTC offset, so its timezone is ambiguous.`;
+}
+
+export const MISSING_TIME_ZONE_HINT =
+  'Add "Z" for UTC or an explicit offset, e.g. "2026-04-04T00:00:00Z" or "2026-04-04T00:00:00+01:00".';
 
 export function formatEvent(event: any, opts: { full?: boolean } = {}) {
   const full = opts.full ?? true;
