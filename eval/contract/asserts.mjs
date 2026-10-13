@@ -136,12 +136,12 @@ export function writeDisabled(output) {
 
 // Wizard failures used to be bare prose, so these asserted on substrings.
 // They are envelopes now: assert the slug and the recovery, not the wording.
-export function accountAddEnvMode(output) {
+export function accountAddNoArgs(output) {
   const j = envelope(output);
   if (!j) return fail('not a parseable envelope: ' + text(output).slice(0, 160));
-  if (j.error !== 'E_ENV_ACCOUNTS_MODE') return fail('wrong slug: ' + j.error);
-  if (j.retriable !== false) return fail('env mode is not retriable');
-  if (!/migrate-config/.test(j.hint ?? '')) return fail('hint does not name the way out');
+  if (j.error !== 'elicitation_unsupported') return fail('wrong slug: ' + j.error);
+  if (j.retriable !== false) return fail('no-args call is not retriable');
+  if (!/"alias"/.test(j.hint ?? '')) return fail('hint does not show the explicit-args form');
   return ok(j.error);
 }
 
