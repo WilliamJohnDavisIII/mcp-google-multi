@@ -11,7 +11,7 @@ import {
   signReauthLink, verifyReauthLink,
   signPending, verifyPending,
   ReplayGuard, type ReplaySpend, RefreshStore, STATE_TTL_DEFAULT, CODE_TTL_DEFAULT, ACCESS_TTL_DEFAULT,
-  type StatePayload,
+  type StatePayload, clientFingerprint,
 } from './mcp-token.js';
 import { fetchCimdDocument } from './ssrf-guard.js';
 import { CimdClientCache } from './cimd-cache.js';
@@ -133,6 +133,11 @@ export interface AuthServerDeps {
   registeredClients?: Map<string, { redirect_uris: string[] }>;
   replayGuard?: ReplayGuard;
   refreshStore?: RefreshStore;
+  /** The presenting client's address, for the refresh-rotation fingerprint
+   * (clientFingerprint) that tells a concurrent duplicate request from a
+   * different holder of the same token. Default: the socket's remote
+   * address. A host behind a trusted proxy wires its own resolver here. */
+  clientAddress?: (req: IncomingMessage) => string | undefined;
   now?: () => number; // ms
   /** Server-side log (never sent to callers) for auth failures / SSRF blocks. */
   log?: (line: string) => void;
@@ -330,6 +335,12 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
   const registered = deps.registeredClients ?? new Map<string, { redirect_uris: string[] }>();
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => undefined);
+  const clientAddress = deps.clientAddress ?? ((req: IncomingMessage) => req.socket.remoteAddress);
+  // Not a secret, not used for authorization: only to tell a concurrent
+  // duplicate /token request from a different holder of the same refresh
+  // token. See docs/internals.md.
+  const fingerprintOf = (req: IncomingMessage, clientId: string): string =>
+    clientFingerprint(clientId, req.headers['user-agent'] ?? '', clientAddress(req) ?? '');
   // Silently dropping a lifetime the caller asked for would leave sessions unlimited.
   if (deps.refreshStore && (config.refreshMaxAgeSec !== undefined || config.refreshIdleSec !== undefined || config.refreshMaxFamiliesPerSub !== undefined)) {
     throw new Error('E_REFRESH_OPTION_CONFLICT: refreshMaxAgeSec, refreshIdleSec and refreshMaxFamiliesPerSub configure the refresh store buildAuthServer creates; set them on the injected refreshStore instead');
@@ -731,7 +742,7 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
           return json(res, 400, { error: 'invalid_grant', message: 'the subject is no longer provisioned' });
         }
       }
-      const refreshToken = refresh.issue(now(), code.sub);
+      const refreshToken = refresh.issue(now(), code.sub, fingerprintOf(req, form.client_id ?? ''));
       log('token issued grant=authorization_code');
       return json(res, 200, { access_token: access, token_type: 'Bearer', expires_in: accessTtl, refresh_token: refreshToken, scope: 'mcp:use' });
     }
@@ -751,7 +762,7 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
         : undefined;
       let next: ReturnType<RefreshStore['rotate']>;
       try {
-        next = refresh.rotate(form.refresh_token ?? '', now(), accept);
+        next = refresh.rotate(form.refresh_token ?? '', now(), accept, fingerprintOf(req, form.client_id ?? ''));
       } catch (e) {
         if (!(e instanceof SubjectCheckUnavailable)) throw e;
         log(`token deferred grant=refresh_token: subject check failed: ${e.cause instanceof Error ? logSafe(e.cause.message, 200) : 'non-Error throw'}`);

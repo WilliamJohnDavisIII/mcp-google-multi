@@ -269,6 +269,9 @@ const R1_LENGTH = 94;
 const R1_BODY = 36;
 const R1_BYTES = 68;
 const R1_MAC_DOMAIN = Buffer.from('mcp-google-multi refresh r1\n');
+// Domain-separated from R1_MAC_DOMAIN: a successor derived under this key
+// must never verify as a current token's own MAC, or vice versa.
+const R1_SUCCESSOR_DOMAIN = Buffer.from('mcp-google-multi refresh r1 successor\n');
 const R1_KEY_INFO = 'mcp-google-multi:refresh-mac:v1';
 // A passphrase key (deriveKey's bare-sha256 branch) would otherwise let one
 // leaked r1 token test guesses offline at hash speed; scrypt adds a work factor.
@@ -278,6 +281,10 @@ const GEN_MAX = 0xffffffff;
 const LEGACY_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 /** With a lifetime set, a stored time further ahead than this is pulled back to the clock. */
 const CLOCK_SKEW_MS = 5 * 60_000;
+/** A gen-1-behind token presented within this long of the rotation that
+ * retired it, from the same client, can be a concurrent duplicate rather
+ * than theft. See docs/internals.md. */
+export const REPLAY_WINDOW_MS = 30_000;
 
 interface FamilyRecord {
   sub: string;
@@ -291,6 +298,8 @@ interface FamilyRecord {
   usedAt: number;
   /** The earlier-release family this one continues. */
   legacy?: string;
+  /** Client fingerprint of the rotation that last set `cur` (clientFingerprint). */
+  by?: string;
 }
 
 interface RefreshData {
@@ -330,6 +339,8 @@ interface R1Token {
   fid: string;
   gen: number;
   digest: Buffer;
+  /** The decoded fid||gen||rand, before the MAC: what a rotation's successor is derived from. */
+  body: Buffer;
 }
 
 /** A token this key minted, or null. Pure CPU: runs before the file lock. */
@@ -342,7 +353,7 @@ function parseR1(t: unknown, key: Buffer): R1Token | null {
   if (buf.length !== R1_BYTES || buf.toString('base64url') !== text) return null;
   if (!timingSafeEqual(buf.subarray(R1_BODY), r1Mac(key, buf.subarray(0, R1_BODY)))) return null;
   const fidBytes = buf.subarray(0, 16);
-  return { fidBytes, fid: fidBytes.toString('base64url'), gen: buf.readUInt32BE(16), digest: sha256(buf) };
+  return { fidBytes, fid: fidBytes.toString('base64url'), gen: buf.readUInt32BE(16), digest: sha256(buf), body: buf.subarray(0, R1_BODY) };
 }
 
 function mintR1(key: Buffer, fid: Buffer, gen: number): { token: string; cur: string } {
@@ -352,6 +363,25 @@ function mintR1(key: Buffer, fid: Buffer, gen: number): { token: string; cur: st
   randomBytes(16).copy(body, 20);
   const buf = Buffer.concat([body, r1Mac(key, body)]);
   return { token: R1_PREFIX + buf.toString('base64url'), cur: sha256(buf).toString('base64url') };
+}
+
+/**
+ * The token a rotation of `presentedBody` (a parsed token's fid||gen||rand)
+ * mints: generation + 1, and a random part derived (not drawn) from the
+ * presented body, so re-deriving it from a retired token and comparing the
+ * digest against a family's stored `cur` tells a concurrent duplicate from a
+ * different gen-1 token. Domain-separated from `r1Mac` so neither function's
+ * output can be read as the other's. See docs/internals.md.
+ */
+function mintR1Successor(key: Buffer, presentedBody: Buffer): { token: string; cur: string; digest: Buffer } {
+  const rand = createHmac('sha256', key).update(R1_SUCCESSOR_DOMAIN).update(presentedBody).digest().subarray(0, 16);
+  const body = Buffer.alloc(R1_BODY);
+  presentedBody.copy(body, 0, 0, 16); // fid
+  body.writeUInt32BE(presentedBody.readUInt32BE(16) + 1, 16); // gen + 1
+  rand.copy(body, 20);
+  const buf = Buffer.concat([body, r1Mac(key, body)]);
+  const digest = sha256(buf);
+  return { token: R1_PREFIX + buf.toString('base64url'), cur: digest.toString('base64url'), digest };
 }
 
 /**
@@ -365,6 +395,23 @@ export function refreshFamilyTagger(masterKey: string): (token: string) => strin
     const p = parseR1(token, key);
     return p ? familyTag(p.fidBytes) : null;
   };
+}
+
+/**
+ * A non-secret correlation tag for the client presenting a refresh token:
+ * sha256(client_id + "\n" + user-agent + "\n" + address), truncated to 16
+ * bytes and base64url-encoded. Not a secret (anyone who can see a request
+ * can compute it); it only tells apart two concurrent requests that came
+ * from the same client context from one that did not. Pure, no I/O.
+ */
+export function clientFingerprint(clientId: string, userAgent: string, address: string): string {
+  return sha256(`${clientId}\n${userAgent}\n${address}`).subarray(0, 16).toString('base64url');
+}
+
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, 'utf-8');
+  const bb = Buffer.from(b, 'utf-8');
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
 function ownEntries(o: unknown): [string, unknown][] {
@@ -391,7 +438,8 @@ function isFamilyRecord(key: string, r: unknown): r is FamilyRecord {
     Number.isInteger(x.gen) && (x.gen as number) >= 0 && (x.gen as number) <= GEN_MAX &&
     typeof x.cur === 'string' && x.cur.length === 43 && isCanonicalB64(x.cur, 32) &&
     Number.isFinite(x.createdAt) && Number.isFinite(x.usedAt) &&
-    (x.legacy === undefined || typeof x.legacy === 'string')
+    (x.legacy === undefined || typeof x.legacy === 'string') &&
+    (x.by === undefined || typeof x.by === 'string')
   );
 }
 
@@ -423,7 +471,11 @@ function decodeData(d: unknown): { data: RefreshData; dirty: boolean } {
   let dropped = 0;
   for (const [k, f] of ownEntries(x.families)) {
     if (isFamilyRecord(k, f)) {
-      data.families[k] = { sub: f.sub, gen: f.gen, cur: f.cur, createdAt: f.createdAt, usedAt: f.usedAt, ...(f.legacy === undefined ? {} : { legacy: f.legacy }) };
+      data.families[k] = {
+        sub: f.sub, gen: f.gen, cur: f.cur, createdAt: f.createdAt, usedAt: f.usedAt,
+        ...(f.legacy === undefined ? {} : { legacy: f.legacy }),
+        ...(f.by === undefined ? {} : { by: f.by }),
+      };
     } else dropped += 1;
   }
   for (const [t, r] of ownEntries(x.active)) {
@@ -662,7 +714,7 @@ export class RefreshStore {
     return fid;
   }
 
-  issue(nowMs: number, sub: string): string {
+  issue(nowMs: number, sub: string, fingerprint?: string): string {
     if (typeof sub !== 'string' || sub === '') throw new Error('RefreshStore.issue: sub must be a non-empty string');
     const key = this.key();
     return withFileLock(this.path, () => {
@@ -671,12 +723,27 @@ export class RefreshStore {
       const fid = this.newFamilyId(data);
       const fidKey = fid.toString('base64url');
       const { token, cur } = mintR1(key, fid, 0);
-      data.families[fidKey] = { sub, gen: 0, cur, createdAt: nowMs, usedAt: nowMs };
+      data.families[fidKey] = { sub, gen: 0, cur, createdAt: nowMs, usedAt: nowMs, ...(fingerprint === undefined ? {} : { by: fingerprint }) };
       if (this.maxFamiliesPerSub !== undefined) this.enforceFamilyCap(data, sub, this.maxFamiliesPerSub, lines, fidKey);
       this.save(data);
       this.emit(lines);
       return token;
     });
+  }
+
+  /** A presented token exactly one generation behind `f`, inside the replay
+   * window, from the fingerprint that retired it, whose derived successor
+   * matches `f.cur`: a concurrent duplicate request rather than theft (see
+   * docs/internals.md). Null for anything else at that generation, including
+   * a different rand (a genuinely different gen-1 token) or no fingerprint. */
+  private concurrentDuplicate(r1: R1Token, f: FamilyRecord, nowMs: number, fingerprint: string | undefined, key: Buffer): { token: string } | null {
+    if (fingerprint === undefined || f.by === undefined) return null;
+    if (r1.gen !== f.gen - 1) return null;
+    if (nowMs - f.usedAt > REPLAY_WINDOW_MS) return null;
+    if (!timingSafeStringEqual(fingerprint, f.by)) return null;
+    const succ = mintR1Successor(key, r1.body);
+    if (!timingSafeEqual(succ.digest, Buffer.from(f.cur, 'base64url'))) return null;
+    return { token: succ.token };
   }
 
   /** Rotate a presented refresh token; null if it is unknown, malformed, or
@@ -687,8 +754,15 @@ export class RefreshStore {
    * `accept` (optional) is called inside the store lock, before any mutation,
    * with the record's sub. false: every session of that sub is dropped and
    * null returned. A throw: nothing is written and the error propagates, so
-   * the presented token stays valid. Absent: unchanged. */
-  rotate(oldToken: string, nowMs: number, accept?: (sub: string) => boolean): { token: string; sub: string } | null {
+   * the presented token stays valid. Absent: unchanged.
+   *
+   * `fingerprint` (optional) names the presenting client (clientFingerprint).
+   * Absent: a rotated-away token is always reuse, as before. Present: a
+   * token exactly one generation behind, from the same fingerprint, inside
+   * REPLAY_WINDOW_MS of the rotation that retired it, is a concurrent
+   * duplicate: it gets back the SAME successor token, with no change to the
+   * family (not even `usedAt`). Anything else rotated-away is still reuse. */
+  rotate(oldToken: string, nowMs: number, accept?: (sub: string) => boolean, fingerprint?: string): { token: string; sub: string } | null {
     const key = this.key();
     const r1 = parseR1(oldToken, key);
     if (!r1 && !(typeof oldToken === 'string' && LEGACY_TOKEN.test(oldToken) && !this.legacyEmpty)) return null;
@@ -714,19 +788,27 @@ export class RefreshStore {
           lines.push(`refresh family ${why === 'reuse' ? 'revoked' : 'dropped'}: ${why} tag=${familyTag(r1.fidBytes)}`);
           return done(null, true);
         };
-        // Older: a rotated-away token, and the MAC proves this server minted it.
-        if (r1.gen < f.gen) return drop('reuse');
+        // Older: a rotated-away token verified by MAC as server-minted, unless a concurrent duplicate.
+        if (r1.gen < f.gen) {
+          const duplicate = this.concurrentDuplicate(r1, f, nowMs, fingerprint, key);
+          if (!duplicate) return drop('reuse');
+          if (accept && !accept(f.sub)) return refuse(f.sub);
+          lines.push(`refresh family replayed tag=${familyTag(r1.fidBytes)}`);
+          return done({ token: duplicate.token, sub: f.sub }, dirty);
+        }
         // Newer, or the same generation with another random part: the store
         // lost a write the client saw. Not evidence of theft.
         if (r1.gen > f.gen) return drop('ahead');
         if (!timingSafeEqual(r1.digest, Buffer.from(f.cur, 'base64url'))) return drop('mismatch');
         if (accept && !accept(f.sub)) return refuse(f.sub);
         if (f.gen === GEN_MAX) return drop('overflow');
-        const next = mintR1(key, r1.fidBytes, f.gen + 1);
+        const next = mintR1Successor(key, r1.body);
         f.gen += 1;
         f.cur = next.cur;
         // now() is read before the lock wait, so a later writer can hold an earlier time.
         f.usedAt = Math.max(f.usedAt, nowMs);
+        if (fingerprint === undefined) delete f.by;
+        else f.by = fingerprint;
         return done({ token: next.token, sub: f.sub }, true);
       }
 
