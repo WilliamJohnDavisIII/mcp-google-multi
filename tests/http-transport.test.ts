@@ -1384,13 +1384,20 @@ describe('HttpTransportHost graceful close', () => {
    * its socket buffer when it ends the connection. */
   // Windows ticks timers at about 15.6 ms and reads smaller chunks, so a slow
   // reader there can need several seconds for 8 MB: the graces below leave room.
+  // One pause listener at a time, removed on stop: a leftover one would pause a
+  // later resume() at its first chunk, and a paused socket never sees the close.
   const readSlowly = (socket: net.Socket) => {
     socket.pause();
+    const pauseOnData = () => socket.pause();
     const every = setInterval(() => {
-      socket.once('data', () => socket.pause());
+      socket.removeListener('data', pauseOnData);
+      socket.once('data', pauseOnData);
       socket.resume();
     }, 5);
-    return () => clearInterval(every);
+    return () => {
+      clearInterval(every);
+      socket.removeListener('data', pauseOnData);
+    };
   };
 
   it('close({ graceMs }) delivers a started big response whole to a slow reader that pipelines a large body after the close began', async () => {
@@ -1423,6 +1430,7 @@ describe('HttpTransportHost graceful close', () => {
     await until(() => conn.received().length > 0, 'the start of the big response');
     await until(() => pending.size === 0, 'the big response to finish writing', 15_000);
     stop();
+    expect(conn.socket.listenerCount('data')).toBe(1);
     conn.socket.pause();
     const closing = h.host.close({ graceMs: 15_000 });
     // Past the 5 s keep-alive timeout plus Node's 1 s buffer, with the tail still unread.
