@@ -80,7 +80,14 @@ export function registerAdminTools(server: ToolRegistry, deps: CuratedToolDeps =
         account: accountEnum.describe('Google account alias (must be a Workspace admin)'),
         customer: z.string().default('my_customer').optional(),
         domain: z.string().optional(),
-        query: z.string().optional().describe('Search query, e.g. "name:John"'),
+        query: z.string().optional().describe(
+          'Directory search query: space-separated clauses of field+operator+value, ANDed together. ' +
+          '"=" is exact match, ":" is a contains/startsWith match. Searchable fields include email, name ' +
+          '(matches the concatenated givenName+familyName), givenName, familyName, isAdmin, isDelegatedAdmin, ' +
+          'orgName, orgTitle, orgDepartment, manager, directManager, addressCountry. Prefix/wildcard matching ' +
+          'is a trailing "*" on a ":" clause, e.g. "email:admin*" for every address starting with "admin". ' +
+          'Examples: \'name:John\', \'isAdmin=true\', \'orgTitle:Manager orgName=Engineering\'.',
+        ),
         maxResults: z.number().min(1).max(500).optional(),
         pageToken: z.string().optional(),
         orderBy: z.enum(['email', 'familyName', 'givenName']).optional(),
