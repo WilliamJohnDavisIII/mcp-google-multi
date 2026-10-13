@@ -49,7 +49,13 @@ export interface HttpHostOptions {
    * per-request hooks come from the resolved target ONLY: the host-level
    * argShapeFor / strictArgs / validationEnvelope describe the boot server's
    * registry, never another subject's. */
-  resolveServer?: (claims: { sub: string }) => Promise<ServerTarget | null> | ServerTarget | null;
+  resolveServer?: (
+    claims: { sub: string },
+  ) =>
+    | Promise<ServerTarget | null | { refused: { error: string; message: string } }>
+    | ServerTarget
+    | null
+    | { refused: { error: string; message: string } };
   /** Extra routes keyed by exact pathname (AS endpoints mount here in B13). */
   routes?: Record<string, RouteHandler>;
   log?: (line: string) => void;
@@ -84,6 +90,25 @@ const DISPATCH_TIMEOUT_DEFAULT = 120_000;
  * of a batch synchronously in one tick: without a cap one body multiplies the
  * per-call work by however many frames fit in it. */
 const MAX_BATCH_FRAMES = 16;
+
+// A resolveServer refusal's body reaches the wire verbatim (H3 PR1): validated
+// so a host cannot accidentally leak an operator path/env var through a wrongly
+// shaped slug or an overlong message. No new slug literal enters core itself —
+// the slug is always the host's own value.
+const REFUSAL_SLUG_RE = /^[a-z][a-z0-9_]{0,39}$/;
+const MAX_REFUSAL_MESSAGE_CHARS = 300;
+// eslint-disable-next-line no-control-regex -- deliberately matching control chars to reject them
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+
+function isValidRefusal(r: { error: string; message: string }): boolean {
+  return (
+    REFUSAL_SLUG_RE.test(r.error) &&
+    typeof r.message === 'string' &&
+    r.message.length > 0 &&
+    r.message.length <= MAX_REFUSAL_MESSAGE_CHARS &&
+    !CONTROL_CHAR_RE.test(r.message)
+  );
+}
 
 export function parseOwnerEmails(env: NodeJS.ProcessEnv = process.env): string[] {
   return (env.MCP_OWNER_EMAILS ?? '')
@@ -437,11 +462,26 @@ export class HttpTransportHost {
       validationEnvelope: this.opts.validationEnvelope,
     };
     if (this.opts.resolveServer) {
+      let resolved: ServerTarget | null | { refused: { error: string; message: string } };
       try {
-        target = await this.opts.resolveServer({ sub });
+        resolved = await this.opts.resolveServer({ sub });
       } catch {
-        target = null;
+        resolved = null;
       }
+      if (resolved && 'refused' in resolved) {
+        const { refused } = resolved;
+        if (isValidRefusal(refused)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: refused.error, message: refused.message }));
+          this.log(`403 ${refused.error} path=/mcp`);
+          return;
+        }
+        // An invalid shape falls through to today's exact answer rather than
+        // forwarding something unvalidated; a refusal never reaches dispatch
+        // either way.
+        resolved = null;
+      }
+      target = resolved;
       if (!target) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'tenant_not_found', message: 'no tenant is provisioned for this subject' }));
