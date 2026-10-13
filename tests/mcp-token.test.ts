@@ -20,6 +20,7 @@ import {
   assertRefreshStoreReadable,
   refreshFamilyTagger,
   clientFingerprint,
+  refreshMacKey,
   REPLAY_WINDOW_MS,
   type RefreshStoreOptions,
   type StatePayload,
@@ -648,12 +649,22 @@ describe('RefreshStore concurrent-duplicate replay', () => {
   });
 
   it('clientFingerprint is deterministic, fixed-length, and distinguishes any differing input', () => {
-    const a = clientFingerprint('client-1', 'ua-1', '127.0.0.1');
-    expect(a).toBe(clientFingerprint('client-1', 'ua-1', '127.0.0.1'));
+    const key = refreshMacKey('master-key-for-test');
+    const a = clientFingerprint('client-1', 'ua-1', '127.0.0.1', key);
+    expect(a).toBe(clientFingerprint('client-1', 'ua-1', '127.0.0.1', key));
     expect(a).toMatch(/^[A-Za-z0-9_-]{22}$/);
-    expect(a).not.toBe(clientFingerprint('client-2', 'ua-1', '127.0.0.1'));
-    expect(a).not.toBe(clientFingerprint('client-1', 'ua-2', '127.0.0.1'));
-    expect(a).not.toBe(clientFingerprint('client-1', 'ua-1', '127.0.0.2'));
+    expect(a).not.toBe(clientFingerprint('client-2', 'ua-1', '127.0.0.1', key));
+    expect(a).not.toBe(clientFingerprint('client-1', 'ua-2', '127.0.0.1', key));
+    expect(a).not.toBe(clientFingerprint('client-1', 'ua-1', '127.0.0.2', key));
+  });
+
+  it('clientFingerprint is keyed: not the unkeyed hash of the same inputs, and different under another key', () => {
+    const key = refreshMacKey('master-key-for-test');
+    const otherKey = refreshMacKey('a-different-master-key');
+    const a = clientFingerprint('client-1', 'ua-1', '127.0.0.1', key);
+    const unkeyed = createHash('sha256').update('client-1\nua-1\n127.0.0.1').digest().subarray(0, 16).toString('base64url');
+    expect(a).not.toBe(unkeyed);
+    expect(a).not.toBe(clientFingerprint('client-1', 'ua-1', '127.0.0.1', otherKey));
   });
 });
 

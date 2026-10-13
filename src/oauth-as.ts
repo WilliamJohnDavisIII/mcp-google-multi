@@ -11,7 +11,7 @@ import {
   signReauthLink, verifyReauthLink,
   signPending, verifyPending,
   ReplayGuard, type ReplaySpend, RefreshStore, STATE_TTL_DEFAULT, CODE_TTL_DEFAULT, ACCESS_TTL_DEFAULT,
-  type StatePayload, clientFingerprint,
+  type StatePayload, clientFingerprint, refreshMacKey,
 } from './mcp-token.js';
 import { fetchCimdDocument } from './ssrf-guard.js';
 import { CimdClientCache } from './cimd-cache.js';
@@ -336,11 +336,14 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => undefined);
   const clientAddress = deps.clientAddress ?? ((req: IncomingMessage) => req.socket.remoteAddress);
-  // Not a secret, not used for authorization: only to tell a concurrent
-  // duplicate /token request from a different holder of the same refresh
-  // token. See docs/internals.md.
+  // Not used for authorization, only to tell a concurrent duplicate /token
+  // request from a different holder of the same refresh token; keyed on the
+  // refresh store's own MAC key so a reader of the store file cannot
+  // brute-force the client_id/user-agent/address that produced a stored `by`.
+  // See docs/internals.md.
+  const fingerprintKey = refreshMacKey(config.masterKey);
   const fingerprintOf = (req: IncomingMessage, clientId: string): string =>
-    clientFingerprint(clientId, req.headers['user-agent'] ?? '', clientAddress(req) ?? '');
+    clientFingerprint(clientId, req.headers['user-agent'] ?? '', clientAddress(req) ?? '', fingerprintKey);
   // Silently dropping a lifetime the caller asked for would leave sessions unlimited.
   if (deps.refreshStore && (config.refreshMaxAgeSec !== undefined || config.refreshIdleSec !== undefined || config.refreshMaxFamiliesPerSub !== undefined)) {
     throw new Error('E_REFRESH_OPTION_CONFLICT: refreshMaxAgeSec, refreshIdleSec and refreshMaxFamiliesPerSub configure the refresh store buildAuthServer creates; set them on the injected refreshStore instead');

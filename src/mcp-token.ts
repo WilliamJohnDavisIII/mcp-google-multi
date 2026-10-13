@@ -272,6 +272,9 @@ const R1_MAC_DOMAIN = Buffer.from('mcp-google-multi refresh r1\n');
 // Domain-separated from R1_MAC_DOMAIN: a successor derived under this key
 // must never verify as a current token's own MAC, or vice versa.
 const R1_SUCCESSOR_DOMAIN = Buffer.from('mcp-google-multi refresh r1 successor\n');
+// Domain-separated from both of the above: a fingerprint must never verify as
+// either a token MAC or a successor derivation under the same key.
+const R1_FINGERPRINT_DOMAIN = Buffer.from('mcp-google-multi refresh r1 fingerprint\n');
 const R1_KEY_INFO = 'mcp-google-multi:refresh-mac:v1';
 // A passphrase key (deriveKey's bare-sha256 branch) would otherwise let one
 // leaked r1 token test guesses offline at hash speed; scrypt adds a work factor.
@@ -320,7 +323,10 @@ const familyTag = (family: Buffer | string): string => sha256(family).toString('
 // Keyed on the master key: scrypt runs once per process, not once per store.
 const macKeyMemo = new Map<string, Buffer>();
 
-function refreshMacKey(masterKey: string): Buffer {
+/** The store's own MAC key for `masterKey`, memoized. Exported so a caller
+ * that never touches a RefreshStore (the AS computing a request's
+ * clientFingerprint) can key it the same way the store does. */
+export function refreshMacKey(masterKey: string): Buffer {
   const hit = macKeyMemo.get(masterKey);
   if (hit) return hit;
   const raw = deriveKey(masterKey);
@@ -398,14 +404,17 @@ export function refreshFamilyTagger(masterKey: string): (token: string) => strin
 }
 
 /**
- * A non-secret correlation tag for the client presenting a refresh token:
- * sha256(client_id + "\n" + user-agent + "\n" + address), truncated to 16
- * bytes and base64url-encoded. Not a secret (anyone who can see a request
- * can compute it); it only tells apart two concurrent requests that came
- * from the same client context from one that did not. Pure, no I/O.
+ * A correlation tag for the client presenting a refresh token:
+ * HMAC-SHA256(key, client_id + "\n" + user-agent + "\n" + address), truncated
+ * to 16 bytes and base64url-encoded. `key` is the store's own MAC key
+ * (refreshMacKey), so computing it needs MASTER_KEY: a reader of the store
+ * file alone (`by` is stored, not these inputs) cannot brute-force the
+ * client_id/user-agent/address that produced it. It is still not a secret
+ * capability — anyone who can read a live request can compute the same tag
+ * from it — only a non-forgeable one. Pure, no I/O.
  */
-export function clientFingerprint(clientId: string, userAgent: string, address: string): string {
-  return sha256(`${clientId}\n${userAgent}\n${address}`).subarray(0, 16).toString('base64url');
+export function clientFingerprint(clientId: string, userAgent: string, address: string, key: Buffer): string {
+  return createHmac('sha256', key).update(R1_FINGERPRINT_DOMAIN).update(`${clientId}\n${userAgent}\n${address}`).digest().subarray(0, 16).toString('base64url');
 }
 
 function timingSafeStringEqual(a: string, b: string): boolean {
