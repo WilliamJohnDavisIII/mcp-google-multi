@@ -768,6 +768,15 @@ describe('HttpTransportHost resolveServer refusal (H3 PR1)', () => {
     const res = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: initBody });
     expect(res.status).toBe(403);
     expect(called).toBe(false);
+
+    // initialize alone never calls a tool on a real dispatched server either,
+    // so the assertion above holds even if dispatch happened; send an actual
+    // tools/call for the marker tool, which WOULD set called=true if the
+    // refusal ever fell through to the resolved server.
+    const callBody = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'tag', arguments: {} } };
+    const callRes = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: callBody });
+    expect(callRes.status).toBe(403);
+    expect(called).toBe(false);
   });
 
   it('an invalid slug falls back to today\'s exact tenant_not_found body', async () => {

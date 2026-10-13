@@ -8,9 +8,39 @@ describe('HINT_KINDS', () => {
   // compile-time assertion in src/hint-provider.ts: tsconfig.json only
   // includes src/, so a type-only check living here would never be
   // typechecked by `npm run typecheck` or by vitest's esbuild transform.
-  it('has no duplicates and a runtime length matching the union', () => {
+  it('has no duplicates and matches the exact expected set of kinds', () => {
     expect(HINT_KINDS.length).toBe(new Set(HINT_KINDS).size);
-    expect(HINT_KINDS.length).toBeGreaterThan(20);
+    expect([...HINT_KINDS].sort()).toEqual([
+      'api_not_enabled',
+      'apis_disabled',
+      'daily_quota',
+      'dead_refresh_token',
+      'internal',
+      'invalid_scope',
+      'legacy_plaintext_token',
+      'local_path',
+      'network_error',
+      'no_accounts',
+      'no_default_account',
+      'no_oauth_client',
+      'operator_only',
+      'outbound_denied',
+      'policy_summary',
+      'project_suspended',
+      'reauth',
+      'scope_account_type',
+      'scope_base_excluded',
+      'scope_needs_bundle',
+      'scope_not_granted',
+      'scope_unknown',
+      'scope_unknown_scope',
+      'scopes_missing',
+      'service_not_enabled',
+      'token_unreadable',
+      'toolset_disabled',
+      'untrusted_host',
+      'write_denied',
+    ]);
   });
 });
 
