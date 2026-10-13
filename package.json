@@ -32,6 +32,7 @@
     "./auth": "./dist/auth.js",
     "./usage-metrics": "./dist/usage-metrics.js",
     "./metrics-tap": "./dist/metrics-tap.js",
+    "./hint-provider": "./dist/hint-provider.js",
     "./package.json": "./package.json"
   },
   "files": [

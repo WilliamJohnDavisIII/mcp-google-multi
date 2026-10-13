@@ -9,6 +9,7 @@ import type { ArgKind, ArgShape } from './arg-normalize.js';
 import type { Metrics } from './usage-metrics.js';
 import { MAX_SUGGESTED_KEYS, suggestKeys } from './arg-strict.js';
 import { classifyScope } from './scope-observability.js';
+import { hints } from './hint-provider.js';
 
 /** Nothing granted, no profile: asks the BUNDLE CATALOG whether a scope is
  * reachable at all, independently of any account. */
@@ -267,6 +268,8 @@ export class ToolRegistry {
             refreshAccountSetIfStale();
             const def = this.accounts().defaultAccount;
             if (!def) {
+              const aliases = this.accounts().aliases;
+              const rendered = hints()?.render({ kind: 'no_default_account', aliases });
               return {
                 content: [
                   {
@@ -274,7 +277,7 @@ export class ToolRegistry {
                     text: JSON.stringify({
                       error: 'E_NO_DEFAULT_ACCOUNT',
                       message: 'No "account" given and no default account is configured.',
-                      hint: `Pass account explicitly (valid: ${this.accounts().aliases.join(', ')}), or set GOOGLE_DEFAULT_ACCOUNT / "defaultAccount" in config.json.`,
+                      hint: rendered?.hint ?? `Pass account explicitly (valid: ${aliases.join(', ')}), or set GOOGLE_DEFAULT_ACCOUNT / "defaultAccount" in config.json.`,
                       retriable: false,
                     }),
                   },
