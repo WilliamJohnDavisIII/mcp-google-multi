@@ -1,6 +1,6 @@
 // Measure the tools/list payload the server advertises, and gate CI on it.
 // Lazy mode's whole promise is a small context footprint, so growth is a
-// regression like any other (RQ2: the un-capped discover descriptions had
+// regression like any other (the un-capped discover descriptions had
 // silently reached ~11.5k est tokens before the 6.0.0 diet).
 //
 //   node scripts/measure-tools.mjs             print the measurement JSON

@@ -54,7 +54,7 @@ export function deriveAccountHealth(alias: string, deps: AccountHealthDeps = DEF
   const config = set.configs[alias];
   const admin = getAdminAccounts(set).includes(alias);
   const configured = resolveScopesForAccount(alias, set);
-  // BR-10: env-sourced accounts are not persisted in config.json, so the
+  // Env-sourced accounts are not persisted in config.json, so the
   // account wizard cannot edit them — the deployer edits env instead.
   const base = {
     alias,

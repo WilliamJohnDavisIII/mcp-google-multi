@@ -59,7 +59,7 @@ function systemKeychain(account: string): KeychainEntry | null {
 }
 
 // Default keychain factory, replaceable ONLY for tests: unit tests must never
-// read or write the developer's real OS keyring (the BR-5 mirror once leaked a
+// read or write the developer's real OS keyring (the env->keychain mirror once leaked a
 // test fixture key into a real GNOME keyring — never again).
 let keychainFactory: (account: string) => KeychainEntry | null = systemKeychain;
 
@@ -197,7 +197,7 @@ function resolveKey(
 let cachedMaster: ResolvedKey | null = null;
 let cachedJwt: ResolvedKey | null = null;
 
-/** BR-1 single choke point: no other module may read the env vars directly.
+/** Single choke point: no other module may read the env vars directly.
  * Boot/CLI form: failures exit with a clean stderr slug ("fatal at startup"). */
 export function resolveMasterKey(deps?: KeyDeps): ResolvedKey {
   if (deps) return resolveKey('MASTER_KEY', 'master.key', true, deps);
@@ -235,7 +235,7 @@ export function resolveJwtKey(deps?: KeyDeps): ResolvedKey {
 let mirrored = false;
 
 /**
- * BR-5: after the FIRST successful token decrypt with an env-sourced key,
+ * After the FIRST successful token decrypt with an env-sourced key,
  * mirror it into the keychain (only when the keychain holds no entry) so the
  * key survives an env loss. Gating on a successful decrypt means a stale or
  * wrong env key is never mirrored. Best-effort: failures are doctor material,

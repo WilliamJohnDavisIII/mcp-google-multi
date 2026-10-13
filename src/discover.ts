@@ -4,7 +4,7 @@ import { describePolicy, type Policy } from './write-control.js';
 import { hints } from './hint-provider.js';
 
 // The description budget is the whole point of lazy mode: a full op list per
-// service put lazy tools/list at ~11.5k tokens (RQ2), so descriptions carry a
+// service put lazy tools/list at ~11.5k tokens, so descriptions carry a
 // CAPPED vocabulary and the complete catalog stays in this tool's RESULT.
 const CURATED_OPS_CAP = 10;
 const GENERATED_GROUPS_CAP = 6;

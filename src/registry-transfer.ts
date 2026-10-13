@@ -13,7 +13,7 @@ import { atomicWriteFileSync, atomicWriteWithLock } from './fs-atomic.js';
 import { ALIAS_RE, configFilePath, CONFIG_VERSION, tenantsDir } from './config-file.js';
 import { getTokenDir } from './accounts.js';
 
-/** D11 (refuse-only for v1): export/import operate on the FLAT single-owner
+/** Refuse-only for v1: export/import operate on the FLAT single-owner
  * store. A tenant-namespaced layout means the bundle would either miss every
  * tenant's tokens or exfiltrate all of them in one file — refuse instead.
  * Returns the offending dir, or null when the store is flat. */

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // First import: triggers accounts.js module load (env files + registry) before
-// anything else. Named to also pull the server-only empty-registry guard (BR-4).
+// anything else. Named to also pull the server-only empty-registry guard.
 import { assertServerAccountsConfigured } from './accounts.js';
 import { accountsAssertRequired, assertNoEnvAccountsMode, assertNoEnvOptionalScopesMode, isMultiTenantBoot, mtBootGates } from './boot-gates.js';
 
@@ -153,7 +153,7 @@ async function main() {
   const wantStdio = httpCfg.transport === 'stdio' || httpCfg.transport === 'both';
   const wantHttp = transportIncludesHttp(httpCfg.transport);
 
-  // BR-4: the SERVER never boots with an empty registry — stdio always, HTTP
+  // The SERVER never boots with an empty registry — stdio always, HTTP
   // when single-owner. The bootstrap and diagnostic CLIs above already
   // returned. A multi-tenant boot instead refuses the two process-wide env
   // vectors that would leak one operator's accounts/scopes into every tenant.

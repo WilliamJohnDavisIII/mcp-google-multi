@@ -346,7 +346,7 @@ export function registerAccountWizardTools(
       try {
         // Env-sourced registry: GOOGLE_ACCOUNTS is the exclusive source and
         // config.json accounts are ignored, so a wizard add would be a phantom
-        // write. Refuse up front (BR-10) rather than write a row nothing reads.
+        // write. Refuse up front rather than write a row nothing reads.
         if (process.env.GOOGLE_ACCOUNTS?.trim()) {
           return errorResult(
             'E_ENV_ACCOUNTS_MODE',

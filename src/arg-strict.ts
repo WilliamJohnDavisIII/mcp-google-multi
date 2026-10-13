@@ -48,7 +48,7 @@ export const STRICT_EXEMPT_TOOLS: ReadonlySet<string> = new Set<string>();
  * no arguments; the others are call-plumbing that bridges and proxies have
  * been observed to fold into `arguments` instead of `params._meta`, where the
  * spec puts them. Rejecting these would fail a call the model got right.
- * Measured against the full 978-tool surface: none is a declared key. */
+ * Measured against the full tool surface: none is a declared key. */
 const CLIENT_ARTIFACT_KEYS: ReadonlySet<string> = new Set([
   'random_string',
   'toolCallId',

@@ -223,8 +223,8 @@ const BODY_CAP_CHARS = 50_000;
 const BATCH_MAX_RESULT_CHARS = 100_000;
 // Gmail's messages.send raw/JSON path rejects messages near ~25 MB (the wire
 // message is base64-encoded, ~+33% over the raw bytes), so cap the ESTIMATED
-// ENCODED total there rather than the spec's nominal 35 MB raw (spike/live
-// correction — a 35 MB raw payload is ~47 MB on the wire and Gmail 400s it).
+// ENCODED total there rather than the spec's nominal 35 MB raw (a 35 MB raw
+// payload is ~47 MB on the wire and Gmail 400s it).
 const GMAIL_MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
 const estimateEncoded = (rawBytes: number) => Math.ceil((rawBytes * 4) / 3);
 

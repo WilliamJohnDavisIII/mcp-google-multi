@@ -30,7 +30,7 @@ export function isMultiTenantBoot(): boolean {
   return gates?.multiTenant === true;
 }
 
-/** BR-4 applies to stdio always, and to HTTP only when single-owner: a
+/** The empty-registry guard applies to stdio always, and to HTTP only when single-owner: a
  * multi-tenant HTTP deploy starts empty by design. */
 export function accountsAssertRequired(wantStdio: boolean, multiTenant: boolean): boolean {
   return wantStdio || !multiTenant;
