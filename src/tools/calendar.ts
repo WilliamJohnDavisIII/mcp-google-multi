@@ -287,7 +287,10 @@ export function registerCalendarTools(server: ToolRegistry, deps: CuratedToolDep
         const cid = calendarId ?? 'primary';
 
         const current = await cal.events.get({ calendarId: cid, eventId });
-        const self = (current.data.attendees ?? []).find((a) => a.self);
+        const attendees = current.data.attendees ?? [];
+        const accountEmail = server.accountSet().configs[account as Account]?.email;
+        const self = attendees.find((a) => a.self)
+          ?? attendees.find((a) => a.email?.toLowerCase() === accountEmail?.toLowerCase());
         if (!self?.email) {
           return invalidParams(
             account as Account,

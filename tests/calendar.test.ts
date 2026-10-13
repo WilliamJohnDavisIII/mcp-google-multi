@@ -93,6 +93,42 @@ describe('calendar_respond_event', () => {
     expect(h.requests().some((r) => (r.method ?? 'GET').toUpperCase() === 'PATCH')).toBe(false);
   });
 
+  it('falls back to matching by the account email, case-insensitive, when self is omitted', async () => {
+    const h = toolHarness({
+      respond: () => ({
+        id: 'e1',
+        attendees: [
+          { email: 'other@example.com', responseStatus: 'needsAction' },
+          { email: 'TEST@harness.example', responseStatus: 'needsAction' },
+        ],
+      }),
+    });
+    const res = await h.call('calendar_respond_event', { account: 'test', eventId: 'e1', response: 'tentative' });
+    expect(res.isError).toBeFalsy();
+    const patch = h.requests().find((r) => (r.method ?? 'GET').toUpperCase() === 'PATCH');
+    expect(patch).toBeDefined();
+    const body = (patch as GoogleRequest).data as { attendeesOmitted?: boolean; attendees?: unknown[] };
+    expect(body.attendeesOmitted).toBe(true);
+    expect(body.attendees).toEqual([{ email: 'TEST@harness.example', responseStatus: 'tentative' }]);
+  });
+
+  it('refuses when no attendee matches self or the account email, without patching', async () => {
+    const h = toolHarness({
+      respond: () => ({
+        id: 'e1',
+        attendees: [
+          { email: 'other@example.com', responseStatus: 'needsAction' },
+          { email: 'someone-else@example.com', responseStatus: 'needsAction' },
+        ],
+      }),
+    });
+    const res = await h.call('calendar_respond_event', { account: 'test', eventId: 'e1', response: 'declined' });
+    const env = parseResult(res);
+    expect(res.isError).toBe(true);
+    expect(env.error).toBe('invalid_params');
+    expect(h.requests().some((r) => (r.method ?? 'GET').toUpperCase() === 'PATCH')).toBe(false);
+  });
+
   it('is gated by write-control like any other update', async () => {
     const h = toolHarness({ respond: () => eventWithSelf, policy: { profile: 'read-only', readOnly: true } });
     const res = await h.call('calendar_respond_event', { account: 'test', eventId: 'e1', response: 'tentative' });
