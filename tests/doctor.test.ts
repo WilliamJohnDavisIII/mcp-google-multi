@@ -24,7 +24,7 @@ function deps(over: Partial<DiagnosticsDeps> = {}): DiagnosticsDeps {
     nodeVersion: '22.19.0',
     env: {},
     cwd: '/nonexistent-cwd',
-    accountSet: () => ({ aliases: ['ic'], configs: {}, defaultAccount: undefined } as any),
+    accountSet: () => ({ aliases: ['work'], configs: {}, defaultAccount: undefined } as any),
     accountHealth: (a) => health(a),
     masterKeyProvenance: () => 'file',
     anyTokensExist: () => true,
@@ -33,7 +33,7 @@ function deps(over: Partial<DiagnosticsDeps> = {}): DiagnosticsDeps {
   };
 }
 
-describe('maskEmails via renderReport (BR8, linear scan)', () => {
+describe('maskEmails via renderReport (linear scan)', () => {
   it('masks every address shape the old regex masked', async () => {
     const r = await runDiagnostics(deps({ accountHealth: (a) => health(a, { email: 'someone.long+tag@sub.example.co' }) }));
     const out = renderReport(r, '0.0.0');
@@ -71,7 +71,7 @@ describe('tenant-scoped diagnose (S1.21)', () => {
   });
 });
 
-describe('tenant-scope §1/§2/§6 residue (H3 PR1 commit 2)', () => {
+describe('tenant-scope sections 1, 2 and 6 residue', () => {
   afterEach(() => setHintProvider(null));
 
   function echo() {
@@ -189,7 +189,7 @@ describe('runDiagnostics sections', () => {
   });
 
   it('§2 Config warns on legacy env', async () => {
-    const r = await runDiagnostics(deps({ env: { GOOGLE_ACCOUNTS: 'ic:x@y.com' } }));
+    const r = await runDiagnostics(deps({ env: { GOOGLE_ACCOUNTS: 'work:x@y.com' } }));
     const s = r.sections.find((x) => x.id === 2)!;
     expect(s.verdict).toBe('warn');
     expect(s.hint).toMatch(/migrate-config/);
@@ -222,7 +222,7 @@ describe('runDiagnostics sections', () => {
     expect(s.slug).toBe('E_SCOPE_NOT_GRANTED');
   });
 
-  it('§5: a provider renders scopes_missing with the account (H3)', async () => {
+  it('§5: a provider renders scopes_missing with the account', async () => {
     const seen: HintCase[] = [];
     setHintProvider({ render: (c) => { seen.push(c); return { hint: `kind:${c.kind}` }; } });
     try {
@@ -230,7 +230,7 @@ describe('runDiagnostics sections', () => {
       const r = await runDiagnostics(deps({ accountHealth: (a) => health(a, { scopes }) }));
       const s = r.sections.find((x) => x.id === 5)!;
       expect(s.hint).toBe('kind:scopes_missing');
-      expect(seen).toEqual([{ kind: 'scopes_missing', account: 'ic' }]);
+      expect(seen).toEqual([{ kind: 'scopes_missing', account: 'work' }]);
     } finally {
       setHintProvider(null);
     }
@@ -268,7 +268,7 @@ describe('runDiagnostics sections', () => {
   });
 
   it('§7 HTTP appears for http/both transports; an invalid MCP_TRANSPORT fails it (not silently unknown)', async () => {
-    const withHttp = await runDiagnostics(deps({ env: { MCP_TRANSPORT: 'both', MCP_OWNER_EMAILS: 'ic@example.com' } }));
+    const withHttp = await runDiagnostics(deps({ env: { MCP_TRANSPORT: 'both', MCP_OWNER_EMAILS: 'work@example.com' } }));
     expect(withHttp.sections.find((x) => x.id === 7)?.verdict).toBe('ok');
     const invalid = await runDiagnostics(deps({ env: { MCP_TRANSPORT: 'stdio,http' } }));
     expect(invalid.sections.find((x) => x.id === 7)?.slug).toBe('E_INVALID_TRANSPORT');
@@ -293,11 +293,11 @@ describe('verdict + exit code', () => {
 });
 
 describe('renderers', () => {
-  it('renderReport masks email local-parts (BR8)', () => {
-    const report = { verdict: 'ok' as const, sections: [{ id: 4, title: 'Tokens', verdict: 'ok' as const, lines: ['ic (baki@ideacrafters.com): ok'] }] };
+  it('renderReport masks email local-parts', () => {
+    const report = { verdict: 'ok' as const, sections: [{ id: 4, title: 'Tokens', verdict: 'ok' as const, lines: ['work (alice@acme.example): ok'] }] };
     const out = renderReport(report, '6.0.0');
-    expect(out).not.toContain('baki@ideacrafters.com');
-    expect(out).toContain('b***@ideacrafters.com');
+    expect(out).not.toContain('alice@acme.example');
+    expect(out).toContain('a***@acme.example');
   });
   it('renderDoctorText shows an overall line and glyphs', () => {
     const report = { verdict: 'fail' as const, sections: [{ id: 1, title: 'Runtime', verdict: 'fail' as const, lines: ['Node 20'], hint: 'upgrade' }] };
@@ -308,7 +308,7 @@ describe('renderers', () => {
 });
 
 describe('§7 HTTP', () => {
-  const httpEnv = { MCP_TRANSPORT: 'http', MCP_OWNER_EMAILS: 'ic@example.com' };
+  const httpEnv = { MCP_TRANSPORT: 'http', MCP_OWNER_EMAILS: 'work@example.com' };
 
   it('is absent entirely on stdio-only transport', async () => {
     const r = await runDiagnostics(deps());
