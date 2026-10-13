@@ -118,6 +118,8 @@ const CUD_OVERRIDES: Record<string, Cud> = {
   drive_transfer: 'create',
   // read-only resolver; the name's "resolve" verb would otherwise infer update.
   contacts_resolve: 'read',
+  // "respond" matches no write verb; it patches the event (a write).
+  calendar_respond_event: 'update',
   // Gated by anthropic/requiresUserInteraction, not write-control, so
   // onboarding works under any profile; cud=read also keeps them off fan-out.
   account_add: 'read',

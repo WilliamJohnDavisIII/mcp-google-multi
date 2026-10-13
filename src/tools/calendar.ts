@@ -266,6 +266,54 @@ export function registerCalendarTools(server: ToolRegistry, deps: CuratedToolDep
     },
   );
 
+  // attendeesOmitted plus a single-entry attendees array patches only the caller's own RSVP.
+  server.registerTool(
+    'calendar_respond_event',
+    {
+      description: 'RSVP to a calendar event as this account (accepted/declined/tentative) without touching any other attendee',
+      inputSchema: {
+        account: accountEnum.describe('Google account alias'),
+        eventId: z.string().min(1).describe('Calendar event ID'),
+        calendarId: z.string().default('primary').optional()
+          .describe('Calendar ID (default: primary)'),
+        response: z.enum(['accepted', 'declined', 'tentative']).describe('RSVP response'),
+        comment: z.string().optional().describe('Optional comment attached to the response'),
+      },
+    },
+    async ({ account, eventId, calendarId, response, comment }) => {
+      try {
+        const auth = await getClientFn(account as Account);
+        const cal = calendarClient({ version: 'v3', auth });
+        const cid = calendarId ?? 'primary';
+
+        const current = await cal.events.get({ calendarId: cid, eventId });
+        const self = (current.data.attendees ?? []).find((a) => a.self);
+        if (!self?.email) {
+          return invalidParams(
+            account as Account,
+            `Event "${eventId}" has no attendee entry for this account, so there is nothing to RSVP to.`,
+            'RSVP only applies to events where this account is invited as a guest; check calendar_get_event to see the attendee list.',
+          );
+        }
+
+        const res = await cal.events.patch({
+          calendarId: cid,
+          eventId,
+          requestBody: {
+            attendeesOmitted: true,
+            attendees: [{ email: self.email, responseStatus: response, ...(comment !== undefined ? { comment } : {}) }],
+          },
+        });
+
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(formatEvent(res.data), null, 2) }],
+        };
+      } catch (error: any) {
+        return handleCalendarError(error, account as Account);
+      }
+    },
+  );
+
   server.registerTool(
     'calendar_delete_event',
     {
