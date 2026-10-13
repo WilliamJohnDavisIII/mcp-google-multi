@@ -409,9 +409,9 @@ export function refreshFamilyTagger(masterKey: string): (token: string) => strin
  * to 16 bytes and base64url-encoded. `key` is the store's own MAC key
  * (refreshMacKey), so computing it needs MASTER_KEY: a reader of the store
  * file alone (`by` is stored, not these inputs) cannot brute-force the
- * client_id/user-agent/address that produced it. It is still not a secret
- * capability — anyone who can read a live request can compute the same tag
- * from it — only a non-forgeable one. Pure, no I/O.
+ * client_id/user-agent/address that produced it. It is still not a secret:
+ * anyone who can see a live request can send the same inputs and get the
+ * same tag. Pure, no I/O.
  */
 export function clientFingerprint(clientId: string, userAgent: string, address: string, key: Buffer): string {
   return createHmac('sha256', key).update(R1_FINGERPRINT_DOMAIN).update(`${clientId}\n${userAgent}\n${address}`).digest().subarray(0, 16).toString('base64url');
@@ -771,7 +771,7 @@ export class RefreshStore {
    * no earlier than and at most REPLAY_WINDOW_MS after the rotation that
    * retired it, is a concurrent duplicate: it gets back the SAME successor
    * token, with no change to the family (not even `usedAt`). Anything else
-   * rotated-away is still reuse — including a clock that has stepped back
+   * rotated-away is still reuse, including a clock that has stepped back
    * past `usedAt`, which cannot be told apart from a genuinely stale replay. */
   rotate(oldToken: string, nowMs: number, accept?: (sub: string) => boolean, fingerprint?: string): { token: string; sub: string } | null {
     const key = this.key();
