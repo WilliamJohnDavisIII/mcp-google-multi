@@ -1552,6 +1552,26 @@ describe('alias_add flow + resolveSubject seam (S1.14)', () => {
       expect(loc.searchParams.get('error_description')).toBeNull();
     });
 
+    it('a description containing a double quote is dropped (red by mutation: widening the charset to \\x20-\\x7e)', async () => {
+      const { port } = await startMt({}, {
+        resolveSubject: () => ({ denied: { description: 'say "no"' } }),
+      });
+      const cb = await ownerGateCallback(port);
+      const loc = new URL(cb.headers.location as string);
+      expect(loc.searchParams.get('error')).toBe('access_denied');
+      expect(loc.searchParams.get('error_description')).toBeNull();
+    });
+
+    it('a description containing a backslash is dropped (red by mutation: widening the charset to \\x20-\\x7e)', async () => {
+      const { port } = await startMt({}, {
+        resolveSubject: () => ({ denied: { description: 'back\\slash' } }),
+      });
+      const cb = await ownerGateCallback(port);
+      const loc = new URL(cb.headers.location as string);
+      expect(loc.searchParams.get('error')).toBe('access_denied');
+      expect(loc.searchParams.get('error_description')).toBeNull();
+    });
+
     it('an overlong description (past 200 chars) is dropped', async () => {
       const { port } = await startMt({}, {
         resolveSubject: () => ({ denied: { description: 'x'.repeat(201) } }),
