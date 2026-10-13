@@ -17,4 +17,11 @@ describe('gmail_delete_draft', () => {
     expect(res.isError).toBe(true);
     expect(h.request).not.toHaveBeenCalled();
   });
+
+  it('is refused under a safe-writes write-control policy', async () => {
+    const h = toolHarness({ policy: { profile: 'safe-writes', readOnly: false, allow: [], deny: [] } });
+    const res = await h.call('gmail_delete_draft', { account: 'test', draftId: 'd1' });
+    expect(res.isError).toBe(true);
+    expect(h.request).not.toHaveBeenCalled();
+  });
 });
