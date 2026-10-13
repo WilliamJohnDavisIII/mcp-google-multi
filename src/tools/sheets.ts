@@ -1,7 +1,7 @@
 import type { ToolRegistry } from '../registry.js';
 import { z } from 'zod';
 import { coerceArray, coerceBoolean, coerceJson } from './_coerce.js';
-import { sheets as sheetsClient } from '@googleapis/sheets';
+import { sheets as sheetsClient, type sheets_v4 } from '@googleapis/sheets';
 import { accountArgLive } from '../accounts.js';
 import type { Account } from '../accounts.js';
 import { getClient, type CuratedToolDeps } from '../client.js';
@@ -499,7 +499,8 @@ export function registerSheetsTools(server: ToolRegistry, deps: CuratedToolDeps 
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
         spreadsheetId: z.string().min(1).describe('Spreadsheet ID'),
-        range: gridRangeSchema.describe('Target range (GridRange, half-open indexes)'),
+        range: z.union([gridRangeSchema, z.string().min(1)])
+          .describe('Target range: a GridRange object (half-open indexes), or an A1 string such as "Sheet1!A1:D10" (the sheet title is resolved to a sheetId with one extra call)'),
         backgroundColor: rgbColorSchema.optional().describe('Cell background (RGB 0..1)'),
         textFormat: z.object({
           foregroundColor: rgbColorSchema.optional(),
@@ -531,12 +532,16 @@ export function registerSheetsTools(server: ToolRegistry, deps: CuratedToolDeps 
             'Pass at least one of: backgroundColor, textFormat, horizontalAlignment, verticalAlignment, wrapStrategy, numberFormat.',
           );
         }
+        const targetRange = typeof range === 'string' ? await resolveA1GridRange(sheets, spreadsheetId, range) : range;
+        if ('error' in targetRange) {
+          return invalidParams(account as Account, targetRange.error, targetRange.hint);
+        }
         await sheets.spreadsheets.batchUpdate({
           spreadsheetId,
           requestBody: {
             requests: [{
               repeatCell: {
-                range,
+                range: targetRange,
                 cell: { userEnteredFormat: built.format },
                 fields: built.fields,
               },
@@ -1240,6 +1245,86 @@ const gridRangeSchema = z.object({
   startColumnIndex: z.number().min(0).optional(),
   endColumnIndex: z.number().min(0).optional(),
 });
+
+interface GridRangeIndexes {
+  startRowIndex?: number;
+  endRowIndex?: number;
+  startColumnIndex?: number;
+  endColumnIndex?: number;
+}
+
+function columnLettersToIndex(letters: string): number {
+  let n = 0;
+  for (const ch of letters.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+const A1_CELL_RE = /^([A-Za-z]+)?(\d+)?$/;
+
+// A1 ranges are column/row-letter pairs separated by ':'; either side of the
+// colon, and either half of a side, may be omitted (whole column, row or sheet).
+export function parseA1Range(a1: string): GridRangeIndexes & { sheetName: string } {
+  const bang = a1.indexOf('!');
+  const sheetPart = bang === -1 ? a1 : a1.slice(0, bang);
+  const rangePart = bang === -1 ? '' : a1.slice(bang + 1);
+  const sheetName = sheetPart.startsWith("'") && sheetPart.endsWith("'")
+    ? sheetPart.slice(1, -1).replace(/''/g, "'")
+    : sheetPart;
+  if (rangePart === '') return { sheetName };
+
+  const [startRaw, endRaw] = rangePart.split(':');
+  const m1 = startRaw.match(A1_CELL_RE);
+  if (!m1 || (!m1[1] && !m1[2])) throw new Error(`invalid A1 range "${a1}"`);
+  const [, col1, row1] = m1;
+  const out: GridRangeIndexes & { sheetName: string } = { sheetName };
+
+  if (endRaw === undefined) {
+    if (col1) { const c = columnLettersToIndex(col1); out.startColumnIndex = c; out.endColumnIndex = c + 1; }
+    if (row1) { const r = Number(row1) - 1; out.startRowIndex = r; out.endRowIndex = r + 1; }
+    return out;
+  }
+  const m2 = endRaw.match(A1_CELL_RE);
+  if (!m2 || (!m2[1] && !m2[2])) throw new Error(`invalid A1 range "${a1}"`);
+  const [, col2, row2] = m2;
+  if (col1) out.startColumnIndex = columnLettersToIndex(col1);
+  if (col2) out.endColumnIndex = columnLettersToIndex(col2) + 1;
+  if (row1) out.startRowIndex = Number(row1) - 1;
+  if (row2) out.endRowIndex = Number(row2);
+  return out;
+}
+
+type ResolvedGridRange = { sheetId: number } & GridRangeIndexes;
+
+async function resolveA1GridRange(
+  sheets: sheets_v4.Sheets,
+  spreadsheetId: string,
+  a1: string,
+): Promise<ResolvedGridRange | { error: string; hint: string }> {
+  let parsed: GridRangeIndexes & { sheetName: string };
+  try {
+    parsed = parseA1Range(a1);
+  } catch {
+    return {
+      error: `Could not parse A1 range "${a1}".`,
+      hint: 'Use a form like "Sheet1!A1:D10", "Sheet1!A:D", or "Sheet1" for the whole sheet.',
+    };
+  }
+  const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties(sheetId,title)' });
+  const match = meta.data.sheets?.find((s) => s.properties?.title === parsed.sheetName);
+  if (!match || match.properties?.sheetId == null) {
+    return {
+      error: `No sheet/tab named "${parsed.sheetName}" in this spreadsheet.`,
+      hint: 'Check the tab name, or use sheets_get to list sheet titles and IDs.',
+    };
+  }
+  return {
+    sheetId: match.properties.sheetId,
+    startRowIndex: parsed.startRowIndex,
+    endRowIndex: parsed.endRowIndex,
+    startColumnIndex: parsed.startColumnIndex,
+    endColumnIndex: parsed.endColumnIndex,
+  };
+}
 
 const borderSchema = z.object({
   style: z.enum(['DOTTED', 'DASHED', 'SOLID', 'SOLID_MEDIUM', 'SOLID_THICK', 'NONE', 'DOUBLE']),

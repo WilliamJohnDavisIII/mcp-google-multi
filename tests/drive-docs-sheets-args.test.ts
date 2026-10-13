@@ -174,3 +174,89 @@ describe('docs_replace_text', () => {
     expect(h.requests()).toHaveLength(0);
   });
 });
+
+describe('sheets_format_cells with an A1 range string', () => {
+  const metaRespond = (sheets: { sheetId: number; title: string }[]) => (req: { url: string }) => {
+    if (/\/v4\/spreadsheets\/[^/:]+$/.test(req.url)) {
+      return { sheets: sheets.map((s) => ({ properties: { sheetId: s.sheetId, title: s.title } })) };
+    }
+    return {};
+  };
+
+  it('resolves the sheet title to a sheetId and the A1 span to indexes', async () => {
+    const h = toolHarness({ respond: metaRespond([{ sheetId: 42, title: 'Sheet1' }]) });
+    const res = await h.call('sheets_format_cells', {
+      account: 'test',
+      spreadsheetId: 'S1',
+      range: 'Sheet1!A1:D10',
+      backgroundColor: { red: 1 },
+    });
+    expect(res.isError).toBeFalsy();
+    const batch = h.requests().find((r) => r.url.includes(':batchUpdate'));
+    const range = (batch?.data as { requests: [{ repeatCell: { range: unknown } }] }).requests[0].repeatCell.range;
+    expect(range).toEqual({ sheetId: 42, startRowIndex: 0, endRowIndex: 10, startColumnIndex: 0, endColumnIndex: 4 });
+  });
+
+  it('still accepts a GridRange object directly, with no extra lookup', async () => {
+    const h = toolHarness({ respond: () => ({}) });
+    const res = await h.call('sheets_format_cells', {
+      account: 'test',
+      spreadsheetId: 'S1',
+      range: { sheetId: 7, startRowIndex: 0, endRowIndex: 1 },
+      backgroundColor: { red: 1 },
+    });
+    expect(res.isError).toBeFalsy();
+    expect(h.requests().some((r) => /\/v4\/spreadsheets\/[^/:]+$/.test(r.url))).toBe(false);
+    const batch = h.requests().find((r) => r.url.includes(':batchUpdate'));
+    const range = (batch?.data as { requests: [{ repeatCell: { range: unknown } }] }).requests[0].repeatCell.range;
+    expect(range).toEqual({ sheetId: 7, startRowIndex: 0, endRowIndex: 1 });
+  });
+
+  it('rejects an A1 string naming a sheet/tab that does not exist', async () => {
+    const h = toolHarness({ respond: metaRespond([{ sheetId: 42, title: 'Sheet1' }]) });
+    const res = await h.call('sheets_format_cells', {
+      account: 'test',
+      spreadsheetId: 'S1',
+      range: 'NoSuchTab!A1:D10',
+      backgroundColor: { red: 1 },
+    });
+    const env = parse(res);
+    expect(env.error).toBe('invalid_params');
+    expect(env.message).toContain('NoSuchTab');
+    expect(h.requests().some((r) => r.url.includes(':batchUpdate'))).toBe(false);
+  });
+});
+
+describe('parseA1Range', () => {
+  it('parses a full cell range with a sheet name', async () => {
+    const { parseA1Range } = await import('../src/tools/sheets.js');
+    expect(parseA1Range('Sheet1!A1:D10')).toEqual({
+      sheetName: 'Sheet1',
+      startColumnIndex: 0,
+      endColumnIndex: 4,
+      startRowIndex: 0,
+      endRowIndex: 10,
+    });
+  });
+
+  it('parses a whole-column range', async () => {
+    const { parseA1Range } = await import('../src/tools/sheets.js');
+    expect(parseA1Range('Sheet1!B:D')).toEqual({ sheetName: 'Sheet1', startColumnIndex: 1, endColumnIndex: 4 });
+  });
+
+  it('parses a whole sheet with no range part', async () => {
+    const { parseA1Range } = await import('../src/tools/sheets.js');
+    expect(parseA1Range('Sheet1')).toEqual({ sheetName: 'Sheet1' });
+  });
+
+  it('unquotes a sheet name quoted for embedded spaces', async () => {
+    const { parseA1Range } = await import('../src/tools/sheets.js');
+    expect(parseA1Range("'My Sheet'!A1")).toEqual({
+      sheetName: 'My Sheet',
+      startColumnIndex: 0,
+      endColumnIndex: 1,
+      startRowIndex: 0,
+      endRowIndex: 1,
+    });
+  });
+});
