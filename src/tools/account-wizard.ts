@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { ToolRegistry } from '../registry.js';
-import { getAccountSet, invalidateAccountSet } from '../accounts.js';
-import { mutateConfigFile } from '../config-file.js';
+import { getAccountSet, invalidateAccountSet, refreshAccountSetIfStale } from '../accounts.js';
+import { ALIAS_RE, mutateConfigFile } from '../config-file.js';
 import { writeToken } from '../token-store.js';
 import { resolveScopesForAccount } from '../auth.js';
-import { BUNDLE_CATALOG, closestBundle, resolveBundleAliases } from '../scope-catalog.js';
+import { BUNDLE_CATALOG, closestBundle, isKnownBundle, resolveBundleAliases } from '../scope-catalog.js';
 import { openUrl } from '../open-url.js';
 import { coerceBoolean } from './_coerce.js';
 import { safeMessage, stringifyEnvelope } from './_errors.js';
@@ -23,8 +23,6 @@ import {
 // a CLI. Google consent reuses the loopback flow (leg C); the HTTP-transport
 // consent path (${BASE}/authorize) is owned by the OAuth AS and lands with that
 // cluster. account_add over http is gated behind it.
-
-const ALIAS_RE = /^[a-zA-Z0-9_-]+$/;
 
 export interface AddForm {
   alias: string;
@@ -92,7 +90,7 @@ export function validateAddForm(input: Partial<AddForm>, existingAliases: string
     if (b === 'admin') {
       return { ok: false, slug: 'E_UNKNOWN_BUNDLE', message: '"admin" is not a scope bundle.', hint: 'Use the admin checkbox instead, or pass "admin": true.', alias };
     }
-    if (!(b in BUNDLE_CATALOG)) {
+    if (!isKnownBundle(b)) {
       const closest = closestBundle(b);
       const known = Object.keys(BUNDLE_CATALOG).filter((n) => n !== 'admin').join(', ');
       return {
@@ -180,10 +178,43 @@ function errorResult(slug: string, message: string, hint?: string, account?: str
 
 interface ConsentFailure { ok: false; slug: string; message: string; hint?: string }
 
+/** HTTP-transport consent context (S1.20): set by the HTTP bootstrap. When
+ * present, runConsent NEVER binds a server-side loopback listener — the
+ * user's browser cannot reach the daemon's loopback — and instead hands out
+ * a clientless AS consent URL. The injector decides the flow (single-owner =
+ * the legacy alias_reauth link). */
+export interface WizardHttpConsent {
+  mintConsentUrl: (alias: string) => Promise<string> | string;
+}
+
+let httpConsent: WizardHttpConsent | null = null;
+
+export function setWizardHttpConsent(ctx: WizardHttpConsent | null): void {
+  httpConsent = ctx;
+}
+
+/** Services register their tools at startup, so one first enabled by this
+ * account stays unregistered until a restart; say so rather than claim the
+ * whole account works without one. */
+function restartNote(pending: readonly string[]): string {
+  if (pending.length === 0) return '';
+  const names = pending.map((s) => `"${s}"`).join(', ');
+  const what = pending.length > 1 ? `services ${names} register their` : `service ${names} registers its`;
+  return `\nThe ${what} tools when the server starts: restart the server to use them. Until then, google_api_call can reach the same API.`;
+}
+
+function pendingText(alias: string, url: string, pending: readonly string[]): string {
+  return (
+    `Account "${alias}" is ready to authorize. Open this link in a browser (it belongs to whoever owns the Google account):\n${url}\n` +
+    `On completion the token is stored server-side and the account is usable immediately — no restart. ` +
+    `If the link expires, run account_reauth for a fresh one.${restartNote(pending)}\n${TESTING_MODE_WARNING}`
+  );
+}
+
 /** Run Google consent for `alias` and persist the token. Opens the browser via
  * URL-mode elicitation when the client supports it, else server-side + prints
  * the URL. Returns the granted-scope diff for the S4 report. */
-async function runConsent(server: McpServer, alias: string): Promise<{ ok: true; missing: string[] } | ConsentFailure> {
+async function runConsent(server: McpServer, alias: string): Promise<{ ok: true; missing: string[] } | { ok: 'pending'; url: string } | ConsentFailure> {
   const { randomBytes } = await import('node:crypto');
   const cfg = getAccountSet().configs[alias];
   if (!cfg) {
@@ -194,6 +225,29 @@ async function runConsent(server: McpServer, alias: string): Promise<{ ok: true;
       hint: 'Accounts sourced from GOOGLE_ACCOUNTS are not editable here. Run `mcp-google-multi migrate-config` to move them into config.json.',
     };
   }
+
+  // HTTP transport: consent completes OUT OF BAND at the AS /callback. Never
+  // bind a loopback listener here; try URL-mode elicitation as a convenience
+  // but surface the URL UP FRONT either way (not only on failure).
+  const http = httpConsent;
+  if (http) {
+    let url: string;
+    try {
+      url = await http.mintConsentUrl(alias);
+    } catch (e: unknown) {
+      return { ok: false, slug: 'internal', message: safeMessage(e) };
+    }
+    const caps = server.server.getClientCapabilities?.() as { elicitation?: { url?: unknown } } | undefined;
+    if (caps?.elicitation?.url !== undefined) {
+      try {
+        await server.server.elicitInput(urlElicitationParams(alias, url, randomBytes(16).toString('hex')));
+      } catch {
+        // the URL in the pending text is the recovery
+      }
+    }
+    return { ok: 'pending', url };
+  }
+
   // Bind the ephemeral loopback listener BEFORE building the auth URL: the
   // redirect URI needs the assigned port, and listening first means the
   // callback can't race the browser.
@@ -251,16 +305,20 @@ async function runConsent(server: McpServer, alias: string): Promise<{ ok: true;
   return { ok: true, missing: scopeGrantDiff(scopes, typeof tokens.scope === 'string' ? tokens.scope : undefined) };
 }
 
-function s4Text(alias: string, missing: string[]): string {
+function s4Text(alias: string, missing: string[], pending: readonly string[]): string {
   const outcome = missing.length === 0
     ? `✔ "${alias}" authenticated; all requested scopes granted. It is now usable without a restart.`
     : `⚠ "${alias}" authenticated, but ${missing.length} requested scope(s) were NOT granted (E_SCOPE_NOT_GRANTED). You may have unchecked some on the consent screen. Re-run account_reauth to grant them. The account is usable for the granted scopes.`;
-  return `${outcome}\n${TESTING_MODE_WARNING}`;
+  return `${outcome}${restartNote(pending)}\n${TESTING_MODE_WARNING}`;
 }
 
 const REQUIRES_INTERACTION = { 'anthropic/requiresUserInteraction': true };
 
-export function registerAccountWizardTools(registry: ToolRegistry, server: McpServer): void {
+export function registerAccountWizardTools(
+  registry: ToolRegistry,
+  server: McpServer,
+  awaitingRestart: () => string[] = () => [],
+): void {
   // Registered as META (always-visible, like account_list) so onboarding tools
   // are reachable in lazy mode without discover_all first; registerMeta still
   // preserves the requiresUserInteraction clientMeta and skips the fan-out path.
@@ -275,7 +333,7 @@ export function registerAccountWizardTools(registry: ToolRegistry, server: McpSe
     {
       _meta: REQUIRES_INTERACTION,
       annotations: { openWorldHint: true },
-      description: 'Add a new Google account: pass alias + email directly (plus optional bundles/allBundles/admin), or pass nothing for an interactive form where the client supports elicitation. Writes the registry and runs Google consent in the browser. No file editing or restart needed. Requires GOOGLE_CLIENT_ID/SECRET (run the `setup` prompt first if missing).',
+      description: 'Add a new Google account: pass alias + email directly (plus optional bundles/allBundles/admin), or pass nothing for an interactive form where the client supports elicitation. Writes the registry and runs Google consent in the browser. No file editing or restart needed to use the account (tools of a service it newly enables register at the next restart). Requires GOOGLE_CLIENT_ID/SECRET (run the `setup` prompt first if missing).',
       inputSchema: {
         alias: z.string().optional().describe('Account alias (letters, digits, _ or -). Pass with email to add directly, skipping the form.'),
         account: z.string().optional().describe('Alias for the new account (same as `alias`; every other tool spells it `account`)'),
@@ -333,13 +391,22 @@ export function registerAccountWizardTools(registry: ToolRegistry, server: McpSe
         // S2: atomic write + make the alias callable without a restart (BR3).
         writeAccountRow(validated.alias, validated.email, validated.bundles, validated.admin);
         invalidateAccountSet();
+        // Live account args validate against the refreshed registry already;
+        // the list_changed nudge makes clients re-fetch tools/list, where the
+        // advertised account enums are rebuilt from the live set.
+        try {
+          server.sendToolListChanged();
+        } catch {
+          // a client that cannot receive notifications loses nothing but the nudge
+        }
 
         // S3 + S4: consent + validate.
         const consent = await runConsent(server, validated.alias);
+        if (consent.ok === 'pending') return textResult(pendingText(validated.alias, consent.url, awaitingRestart()));
         if (!consent.ok) return errorResult(consent.slug, consent.message, consent.hint, validated.alias);
         // B15: offer to register the server with another MCP client.
         return textResult(
-          `${s4Text(validated.alias, consent.missing)}\nTip: run account_write_config to register this server with another MCP client (Claude Desktop / Cursor / Claude Code).`,
+          `${s4Text(validated.alias, consent.missing, awaitingRestart())}\nTip: run account_write_config to register this server with another MCP client (Claude Desktop / Cursor / Claude Code).`,
         );
       } catch (e: unknown) {
         // safeMessage, not error.message: an arbitrary throw here can carry a
@@ -370,6 +437,9 @@ export function registerAccountWizardTools(registry: ToolRegistry, server: McpSe
       try {
         const a = args as { alias?: string; account?: string };
         const alias = a.alias ?? a.account ?? '';
+        // No default-account wrapper runs for this tool, so pick up a
+        // hand-edited config.json here: that edit is why a re-auth is asked for.
+        refreshAccountSetIfStale();
         if (!hasClientCredentials()) {
           return errorResult(
             'invalid_client',
@@ -386,8 +456,9 @@ export function registerAccountWizardTools(registry: ToolRegistry, server: McpSe
           );
         }
         const consent = await runConsent(server, alias);
+        if (consent.ok === 'pending') return textResult(pendingText(alias, consent.url, awaitingRestart()));
         if (!consent.ok) return errorResult(consent.slug, consent.message, consent.hint, alias);
-        return textResult(s4Text(alias, consent.missing));
+        return textResult(s4Text(alias, consent.missing, awaitingRestart()));
       } catch (e: unknown) {
         return errorResult('internal', `account_reauth failed: ${safeMessage(e)}`);
       }
@@ -437,6 +508,11 @@ export function registerAccountWizardTools(registry: ToolRegistry, server: McpSe
           const instr = renderInstruction(client, name, entry);
           if (client.managed === 'cli') {
             blocks.push(`${client.label}: run\n  ${instr.text}`);
+          } else if (a.write && mode === 'http') {
+            // Over HTTP this tool runs on the DAEMON, whose homedir is not the
+            // caller's machine: write:true would edit the operator's own client
+            // configs (a cross-tenant hazard under tenancy). Snippet only.
+            blocks.push(`${client.label}: write:true is ignored over HTTP — this tool runs on the server, not your machine. Add to ${instr.path}\n${instr.text}`);
           } else if (a.write) {
             const res = applyFileEntry(client, name, entry);
             blocks.push(

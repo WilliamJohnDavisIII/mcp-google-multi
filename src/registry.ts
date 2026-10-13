@@ -1,14 +1,15 @@
 import type { ListToolsResult, McpServer } from "@modelcontextprotocol/server";
 import { z } from 'zod';
 import { type Policy, isAllowed, writeDisabledResult, IRREVERSIBLE_TOOLS } from './write-control.js';
-import { getAccountSet, refreshAccountSetIfStale } from './accounts.js';
+import { getAccountSet, isLiveAccountField, refreshAccountSetIfStale, type AccountSet } from './accounts.js';
 import { compactResult, trimEnabled } from './trim.js';
-import { fanoutAccountField, invalidAccountsResult, parseAccountSelector, runFanout } from './fanout.js';
+import { fanoutAccountField, invalidAccountsResult, noAccountsResult, parseAccountSelector, runFanout } from './fanout.js';
 import { MAX_RESPONSE_CHARS } from './executor.js';
 import type { ArgKind, ArgShape } from './arg-normalize.js';
 import type { Metrics } from './usage-metrics.js';
-import { suggestKeys } from './arg-strict.js';
+import { MAX_SUGGESTED_KEYS, suggestKeys } from './arg-strict.js';
 import { classifyScope } from './scope-observability.js';
+import { hints } from './hint-provider.js';
 
 /** Nothing granted, no profile: asks the BUNDLE CATALOG whether a scope is
  * reachable at all, independently of any account. */
@@ -98,6 +99,11 @@ const SERVICE_OVERRIDES: Record<string, string> = {
   reports_activities_list: 'admin',
 };
 
+/** The service a tool name belongs to: its prefix, unless overridden. */
+export function serviceOf(name: string): string {
+  return Object.hasOwn(SERVICE_OVERRIDES, name) ? SERVICE_OVERRIDES[name] : name.includes('_') ? name.slice(0, name.indexOf('_')) : name;
+}
+
 // read tools that write local files — same savePath fanned across accounts would clobber
 const FANOUT_EXCLUDE = new Set(['gmail_download_attachment', 'drive_download', 'drive_export']);
 
@@ -124,7 +130,10 @@ function scalarKindOf(field: unknown): ArgKind {
   return 'other';
 }
 
-function isAccountEnum(field: unknown): boolean {
+/** A field naming one of the registry's accounts: a baked enum or a live
+ * account check (curated tools and generated tools both validate live). */
+function isAccountSelector(field: unknown): boolean {
+  if (isLiveAccountField(field)) return true;
   type Def = { type?: string; innerType?: { _zod?: { def?: Def } } };
   const def = (field as { _zod?: { def?: Def } } | undefined)?._zod?.def;
   if (!def) return false;
@@ -169,12 +178,15 @@ export class ToolRegistry {
     policy: Policy,
     mode: DiscoveryMode = resolveDiscoveryMode(),
     private readonly metrics: Metrics | null = null,
+    // The registry's OWN account view: fan-out expansion, selector validation
+    // and default-account injection all read through it so a registry built
+    // over a subset never observes (or leaks) the global set.
+    private readonly accounts: () => AccountSet = getAccountSet,
   ) {
     this.policy = policy;
     this.mode = mode;
     this.registerTool = ((name: string, config: ToolConfig, handler: (...a: unknown[]) => unknown) => {
-      const service =
-        SERVICE_OVERRIDES[name] ?? (name.includes('_') ? name.slice(0, name.indexOf('_')) : name);
+      const service = serviceOf(name);
       const cud = config.cud ?? inferCud(name);
       // destructiveHint=false claims "additive only" (MCP spec) — updates overwrite, so they stay true.
       // idempotent: reads trivially, deletes (already-gone = same), updates
@@ -202,13 +214,14 @@ export class ToolRegistry {
       let inputShape = config.inputSchema ?? {};
       let baseHandler = handler;
       const hasAccountField = 'account' in inputShape && !DEFAULT_ACCOUNT_EXCLUDE.has(name);
-      if (cud === 'read' && !this.registeringMeta && !FANOUT_EXCLUDE.has(name) && isAccountEnum(inputShape.account)) {
+      if (cud === 'read' && !this.registeringMeta && !FANOUT_EXCLUDE.has(name) && isAccountSelector(inputShape.account)) {
         const description = (inputShape.account as z.ZodType).description ?? 'Google account alias';
-        inputShape = { ...inputShape, account: fanoutAccountField(description) };
+        inputShape = { ...inputShape, account: fanoutAccountField(description, () => this.accounts().aliases) };
         baseHandler = async (...args: unknown[]) => {
           const first = args[0] as { account?: string } | undefined;
-          const parsed = parseAccountSelector(typeof first?.account === 'string' ? first.account : '');
-          if (!parsed.ok) return invalidAccountsResult(parsed.invalid);
+          const parsed = parseAccountSelector(typeof first?.account === 'string' ? first.account : '', this.accounts().aliases);
+          if (!parsed.ok) return invalidAccountsResult(parsed.invalid, this.accounts().aliases);
+          if (parsed.aliases.length === 0) return noAccountsResult();
           if (!parsed.fanout) return handler({ ...first, account: parsed.aliases[0] }, ...args.slice(1));
           return runFanout(handler, args, parsed.aliases);
         };
@@ -253,8 +266,10 @@ export class ToolRegistry {
             // heals for a client that always omits account (this branch never
             // reaches getClient's probe). One stat, only on omission.
             refreshAccountSetIfStale();
-            const def = getAccountSet().defaultAccount;
+            const def = this.accounts().defaultAccount;
             if (!def) {
+              const aliases = this.accounts().aliases;
+              const rendered = hints()?.render({ kind: 'no_default_account', aliases });
               return {
                 content: [
                   {
@@ -262,7 +277,7 @@ export class ToolRegistry {
                     text: JSON.stringify({
                       error: 'E_NO_DEFAULT_ACCOUNT',
                       message: 'No "account" given and no default account is configured.',
-                      hint: `Pass account explicitly (valid: ${getAccountSet().aliases.join(', ')}), or set GOOGLE_DEFAULT_ACCOUNT / "defaultAccount" in config.json.`,
+                      hint: rendered?.hint ?? `Pass account explicitly (valid: ${aliases.join(', ')}), or set GOOGLE_DEFAULT_ACCOUNT / "defaultAccount" in config.json.`,
                       retriable: false,
                     }),
                   },
@@ -286,7 +301,7 @@ export class ToolRegistry {
             (a) => {
               const v = (a as { account?: unknown } | undefined)?.account;
               if (typeof v !== 'string' || (v !== '*' && !v.includes(','))) return 1;
-              const sel = parseAccountSelector(v);
+              const sel = parseAccountSelector(v, this.accounts().aliases);
               return sel.ok ? sel.aliases.length : 1;
             },
           )
@@ -307,6 +322,18 @@ export class ToolRegistry {
 
   services(): string[] {
     return [...new Set(this.tools.filter((t) => !t.meta).map((t) => t.service))];
+  }
+
+  /** The registry's OWN alias list: registration-time schema builders (the
+   * generated account enums) read this, never the process global. */
+  accountAliases(): readonly string[] {
+    return this.accounts().aliases;
+  }
+
+  /** The registry's OWN account set: handlers needing an account's email or
+   * profile read this, never the process global. */
+  accountSet(): AccountSet {
+    return this.accounts();
   }
 
   /** Declared input-schema keys + scalar kinds for one tool (tools/call arg
@@ -358,7 +385,7 @@ export class ToolRegistry {
     // case (parentId against parentFolderId) fails containment and edit
     // distance alike, which is the whole reason that matcher exists.
     const keys = candidates.map(([key]) => key);
-    const hits = new Set(unknownKeys.flatMap((k) => suggestKeys(k, keys)));
+    const hits = new Set(unknownKeys.slice(0, MAX_SUGGESTED_KEYS).flatMap((k) => suggestKeys(k, keys)));
     return candidates
       .filter(([key]) => hits.has(key))
       .slice(0, 2)
@@ -513,9 +540,33 @@ export class ToolRegistry {
     return {
       name: tool.name,
       description: tool.description,
-      inputSchema,
+      inputSchema: this.withLiveAccountEnum(tool, inputSchema),
       annotations: tool.annotations,
       ...(tool.clientMeta ? { _meta: tool.clientMeta } : {}),
     };
+  }
+
+  /** Advertise the CURRENT alias enum on every tools/list: account validation
+   * is (or is becoming) live, so a cached boot-time enum would go stale the
+   * moment account_add lands mid-session. The structural schema stays cached;
+   * only the account property's values are refreshed per call. Skipped for
+   * the subject-taking account tools (their `account` is the OPERAND, e.g. a
+   * brand-new alias name, not an identity to enumerate). */
+  private withLiveAccountEnum(tool: ToolEntry, schema: unknown): unknown {
+    if (DEFAULT_ACCOUNT_EXCLUDE.has(tool.name)) return schema;
+    const s = schema as { properties?: Record<string, unknown> };
+    const account = s?.properties?.account as { anyOf?: unknown[]; enum?: unknown[] } | undefined;
+    if (!account) return schema;
+    const aliases = this.accounts().aliases;
+    if (aliases.length === 0) return schema;
+    if (Array.isArray(account.anyOf)) {
+      // fan-out union: advertise '*' + the live aliases on the selector branch
+      // (the one without the CSV pattern), keep the CSV branch as is
+      const isSelector = (b: unknown) => (b as { pattern?: unknown }).pattern === undefined;
+      if (!account.anyOf.some(isSelector)) return schema;
+      const anyOf = account.anyOf.map((b) => (isSelector(b) ? { ...(b as object), enum: ['*', ...aliases] } : b));
+      return { ...s, properties: { ...s.properties, account: { ...account, anyOf } } };
+    }
+    return { ...s, properties: { ...s.properties, account: { ...account, enum: [...aliases] } } };
   }
 }

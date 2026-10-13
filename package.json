@@ -9,6 +9,32 @@
     "mcp-google-multi": "dist/index.js"
   },
   "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./identity": "./dist/identity.js",
+    "./compose": "./dist/compose.js",
+    "./registry": "./dist/registry.js",
+    "./oauth-as": "./dist/oauth-as.js",
+    "./accounts": "./dist/accounts.js",
+    "./token-store": "./dist/token-store.js",
+    "./http-transport": "./dist/http-transport.js",
+    "./http-config": "./dist/http-config.js",
+    "./client": "./dist/client.js",
+    "./config-file": "./dist/config-file.js",
+    "./fs-atomic": "./dist/fs-atomic.js",
+    "./master-key": "./dist/master-key.js",
+    "./mcp-token": "./dist/mcp-token.js",
+    "./boot-gates": "./dist/boot-gates.js",
+    "./tenant-purge": "./dist/tenant-purge.js",
+    "./doctor": "./dist/doctor.js",
+    "./write-control": "./dist/write-control.js",
+    "./scope-catalog": "./dist/scope-catalog.js",
+    "./auth": "./dist/auth.js",
+    "./usage-metrics": "./dist/usage-metrics.js",
+    "./metrics-tap": "./dist/metrics-tap.js",
+    "./hint-provider": "./dist/hint-provider.js",
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist"
   ],

@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { openUrl } from './open-url.js';
 import { ACCOUNTS, getAccountSet } from './accounts.js';
-import { ADMIN_SCOPES, BUNDLE_CATALOG, closestBundle, resolveBundleAliases } from './scope-catalog.js';
+import type { AccountSet } from './accounts.js';
+import { ADMIN_SCOPES, BUNDLE_CATALOG, closestBundle, isKnownBundle, resolveBundleAliases } from './scope-catalog.js';
 import { resolveMasterKey } from './master-key.js';
 import type { ScopeProfile } from './scope-catalog.js';
 import { writeToken } from './token-store.js';
@@ -58,7 +59,7 @@ function legacyGlobalProfile(): ScopeProfile | null {
         'E_UNKNOWN_BUNDLE: "admin" is not a global bundle: grant it per account via GOOGLE_ADMIN_ACCOUNTS or an "admin: true" scope profile.',
       );
     }
-    if (!(bundle in BUNDLE_CATALOG)) {
+    if (!isKnownBundle(bundle)) {
       const hint = closestBundle(bundle);
       throw new Error(
         `E_UNKNOWN_BUNDLE: unknown bundle "${bundle}" in GOOGLE_OPTIONAL_SCOPES${hint ? ` — did you mean "${hint}"?` : ''}`,
@@ -68,10 +69,9 @@ function legacyGlobalProfile(): ScopeProfile | null {
   return { bundles };
 }
 
-function profileForAccount(alias: string): ScopeProfile {
+function profileForAccount(alias: string, set: AccountSet = getAccountSet()): ScopeProfile {
   const legacy = legacyGlobalProfile();
   if (legacy) return legacy;
-  const set = getAccountSet();
   const name = set.configs[alias]?.scopeProfile ?? 'base';
   // hasOwn: a profile named like an Object.prototype member must never
   // resolve to the inherited function.
@@ -80,13 +80,12 @@ function profileForAccount(alias: string): ScopeProfile {
 
 /** Union of every account's resolved bundles: a service registers if ANY
  * account can authorize it; per-account authz happens at call time (BR2). */
-export function getOptionalBundles(): string[] {
+export function getOptionalBundles(set: AccountSet = getAccountSet()): string[] {
   const legacy = legacyGlobalProfile();
   if (legacy) return legacy.bundles.filter(b => b !== 'admin');
   const union = new Set<string>();
-  const set = getAccountSet();
   for (const alias of set.aliases) {
-    for (const b of profileForAccount(alias).bundles) {
+    for (const b of profileForAccount(alias, set).bundles) {
       if (b !== 'admin') union.add(b);
     }
   }
@@ -96,11 +95,11 @@ export function getOptionalBundles(): string[] {
 /** Aliases granted ADMIN_SCOPES: per-account admin flag (env
  * GOOGLE_ADMIN_ACCOUNTS overrides config.json at resolve) OR the account's
  * scope profile carrying admin (boolean or "admin" bundle) — equivalent forms. */
-export function getAdminAccounts(): string[] {
-  const { aliases, configs } = getAccountSet();
+export function getAdminAccounts(set: AccountSet = getAccountSet()): string[] {
+  const { aliases, configs } = set;
   return aliases.filter((a) => {
     if (configs[a].admin === true) return true;
-    const p = profileForAccount(a);
+    const p = profileForAccount(a, set);
     return p.admin === true || p.bundles.includes('admin');
   });
 }
@@ -109,8 +108,8 @@ export function getAdminAccounts(): string[] {
  * legacy env) changes its consent set and requires re-running auth. Evaluated
  * per account: `work` can carry admin + gmail_settings while `personal` is
  * never asked for them. */
-export function resolveScopesForAccount(alias: string): string[] {
-  const profile = profileForAccount(alias);
+export function resolveScopesForAccount(alias: string, set: AccountSet = getAccountSet()): string[] {
+  const profile = profileForAccount(alias, set);
   const scopes = profile.includesBase === false ? [] : [...BASE_SCOPES];
 
   for (const bundle of profile.bundles) {
@@ -118,7 +117,7 @@ export function resolveScopesForAccount(alias: string): string[] {
     scopes.push(...BUNDLE_CATALOG[bundle].scopes);
   }
 
-  if (getAdminAccounts().includes(alias)) {
+  if (getAdminAccounts(set).includes(alias)) {
     scopes.push(...ADMIN_SCOPES);
   }
 

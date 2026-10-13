@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
 import { isAllowed, writeDisabledResult, type Policy } from '../write-control.js';
-import { accountAliasSchema } from '../accounts.js';
+import { accountArgLive } from '../accounts.js';
 import { getClient } from '../client.js';
 import { coerceJson } from './_coerce.js';
 import { getToolsets, toolsetEnabled, type Toolsets } from '../toolsets.js';
-import { editDistance } from '../scope-catalog.js';
-import { executeApiMethod, jsonResult, type QueryParams } from '../executor.js';
+import { editDistance, SUGGEST_MAX_INPUT } from '../scope-catalog.js';
+import { executeApiMethod, jsonResult, type ExecuteDeps, type QueryParams } from '../executor.js';
 import {
   SUPPORTED_APIS,
   resolveApiAliases,
@@ -15,9 +15,10 @@ import {
   cudFromMethod,
   loadMethodIndex,
   searchMethods,
+  MAX_SEARCH_QUERY,
 } from '../discovery-client.js';
+import { hints } from '../hint-provider.js';
 
-const accountEnum = accountAliasSchema.optional();
 
 // Policy/toolset namespace for each API alias must match the NAMED tools' service
 // names, or user deny globs and GOOGLE_TOOLSETS silently miss escape-hatch calls.
@@ -44,17 +45,25 @@ const SERVICE_FOR_ALIAS: Record<string, string> = {
   analyticsdata: 'analytics',
 };
 
-export interface EscapeDeps extends DiscoveryDeps {
-  getClientFn?: typeof getClient;
+export interface EscapeDeps extends DiscoveryDeps, ExecuteDeps {
   toolsets?: Toolsets;
 }
+
+/** Discovery ids are short dotted identifiers; the bound keeps a caller from
+ * sending megabytes through lookup, suggestion and the echoed message. */
+const MAX_METHOD_ID = 256;
+const MAX_API_ALIAS = 64;
 
 /** Up to three closest known ids for the unknown_method did-you-mean hint;
  * bounded distance so unrelated ids never masquerade as suggestions. */
 export function nearestMethodIds(methodId: string, index: DiscoveryMethod[]): string[] {
+  if (methodId.length > SUGGEST_MAX_INPUT) return [];
   const maxDist = Math.max(3, Math.floor(methodId.length / 3));
+  const wanted = methodId.toLowerCase();
   return index
-    .map((m) => ({ id: m.id, d: editDistance(methodId.toLowerCase(), m.id.toLowerCase()) }))
+    // the distance is at least the length gap, so most ids skip the DP
+    .filter((m) => Math.abs(m.id.length - wanted.length) <= maxDist)
+    .map((m) => ({ id: m.id, d: editDistance(wanted, m.id.toLowerCase()) }))
     .filter((x) => x.d <= maxDist)
     .sort((a, b) => a.d - b.d)
     .slice(0, 3)
@@ -74,6 +83,8 @@ function describeMethod(m: DiscoveryMethod) {
 }
 
 export function registerEscapeTools(registry: ToolRegistry, policy: Policy, deps: EscapeDeps = {}): void {
+  // Live per-registry account validation (S1.10), same as the curated files.
+  const accountEnum = accountArgLive(() => registry.accountAliases()).optional();
   const getClientFn = deps.getClientFn ?? getClient;
   const toolsets = deps.toolsets ?? getToolsets();
   const serviceForAlias = (alias: string): string => SERVICE_FOR_ALIAS[alias] ?? alias;
@@ -82,16 +93,18 @@ export function registerEscapeTools(registry: ToolRegistry, policy: Policy, deps
   };
   const enabledApis = Object.keys(SUPPORTED_APIS).filter(apiEnabled);
   const apiList = enabledApis.join(', ');
-  const toolsetDisabled = (alias: string) =>
-    jsonResult(
+  const toolsetDisabled = (alias: string) => {
+    const rendered = hints()?.render({ kind: 'toolset_disabled', api: alias, service: serviceForAlias(alias) });
+    return jsonResult(
       {
         error: 'toolset_disabled',
-        message: `API "${alias}" maps to service "${serviceForAlias(alias)}", which is excluded by GOOGLE_TOOLSETS.`,
-        hint: 'Add the service to GOOGLE_TOOLSETS (or unset it) to use this API.',
+        message: rendered?.message ?? `API "${alias}" maps to service "${serviceForAlias(alias)}", which is excluded by GOOGLE_TOOLSETS.`,
+        hint: rendered?.hint ?? 'Add the service to GOOGLE_TOOLSETS (or unset it) to use this API.',
         retriable: false,
       },
       true,
     );
+  };
 
   registry.registerMeta(
     'google_api_search',
@@ -101,8 +114,8 @@ export function registerEscapeTools(registry: ToolRegistry, policy: Policy, deps
         'dedicated tool here. Returns method ids + parameters to invoke via google_api_call. ' +
         `APIs: ${apiList}.`,
       inputSchema: {
-        query: z.string().describe('Keywords, e.g. "slides create presentation" or "drive revisions"'),
-        api: z.string().optional().describe('Restrict the search to one API alias'),
+        query: z.string().max(MAX_SEARCH_QUERY).describe('Keywords, e.g. "slides create presentation" or "drive revisions"'),
+        api: z.string().max(MAX_API_ALIAS).optional().describe('Restrict the search to one API alias'),
         maxResults: z.number().min(1).max(25).default(10).optional(),
       },
       annotations: { openWorldHint: true },
@@ -158,8 +171,8 @@ export function registerEscapeTools(registry: ToolRegistry, policy: Policy, deps
         'drive.files.export) use drive_download / drive_export instead.',
       inputSchema: {
         account: accountEnum.describe('Google account alias (omit for the default account)'),
-        api: z.string().describe(`API alias: ${apiList}`),
-        methodId: z.string().min(1).describe('Discovery method id, e.g. "drive.revisions.list"'),
+        api: z.string().max(MAX_API_ALIAS).describe(`API alias: ${apiList}`),
+        methodId: z.string().min(1).max(MAX_METHOD_ID).describe('Discovery method id, e.g. "drive.revisions.list"'),
         pathParams: coerceJson(z.record(z.string(), z.union([z.string(), z.number()])).optional())
           .describe('Values for {placeholders} in the method path'),
         queryParams: coerceJson(
@@ -249,7 +262,7 @@ export function registerEscapeTools(registry: ToolRegistry, policy: Policy, deps
           queryParams: queryParams as QueryParams | undefined,
           body,
         },
-        { getClientFn },
+        { getClientFn, scopeDeps: deps.scopeDeps },
       );
     },
   );

@@ -3,16 +3,19 @@ import * as path from 'node:path';
 import * as readline from 'node:readline';
 import type { ToolRegistry } from './registry.js';
 import { getAccountSet } from './accounts.js';
-import { deriveAccountHealth, type AccountHealth } from './tools/accounts-tool.js';
+import { accountHealthDepsFor, deriveAccountHealth, type AccountHealth } from './tools/accounts-tool.js';
+import { isOwnerContext, type IdentityContext } from './identity.js';
 import { peekMasterKeyProvenance, deleteMasterKeyMaterial } from './master-key.js';
 import { hasToken } from './token-store.js';
 import { configDir, loadConfigFile } from './config-file.js';
 import { envValueSource } from './env-load.js';
+import { reauthHint } from './reauth-hint.js';
 import { describeMetricsDir, resolveUsageMetrics, sourceLabel } from './usage-metrics.js';
-import { probeApiEnablement } from './api-probe.js';
+import { apiProbeDepsFor, probeApiEnablement } from './api-probe.js';
 import { safeMessage, stringifyEnvelope } from './tools/_errors.js';
 import { resolveHttpConfig, HttpConfigError, type HttpConfig } from './http-config.js';
 import { parseOwnerEmails } from './http-transport.js';
+import { hints } from './hint-provider.js';
 
 // B9: one engine (runDiagnostics), two skins — `doctor` (CLI glyph) and
 // `diagnose` (agent tool, structured). Sections 1-6 here; section 7 (HTTP:
@@ -132,9 +135,22 @@ export function apiEnableLink(api: string): string {
 
 const LEGACY_ENV_KEYS = ['GOOGLE_ACCOUNTS', 'GOOGLE_OPTIONAL_SCOPES', 'GOOGLE_ADMIN_ACCOUNTS'] as const;
 
-function sectionRuntime(deps: DiagnosticsDeps): DiagnosticSection {
+function sectionRuntime(deps: DiagnosticsDeps, tenantScope = false): DiagnosticSection {
   const major = Number.parseInt(deps.nodeVersion.split('.')[0] ?? '0', 10);
   if (!Number.isFinite(major) || major < MIN_NODE_MAJOR) {
+    if (tenantScope) {
+      // The host version is operator infrastructure, not the tenant's (E7
+      // residue): no version string, and the fix is the operator's to apply.
+      const rendered = hints()?.render({ kind: 'operator_only', slug: 'E_NODE_TOO_OLD' });
+      return {
+        id: 1,
+        title: 'Runtime',
+        verdict: 'fail',
+        slug: 'E_NODE_TOO_OLD',
+        lines: ['Runtime below the supported version'],
+        hint: rendered?.hint ?? 'Tell the server operator the code E_NODE_TOO_OLD.',
+      };
+    }
     return {
       id: 1,
       title: 'Runtime',
@@ -144,24 +160,37 @@ function sectionRuntime(deps: DiagnosticsDeps): DiagnosticSection {
       hint: `Upgrade to Node ${MIN_NODE_MAJOR} LTS or newer.`,
     };
   }
-  return { id: 1, title: 'Runtime', verdict: 'ok', lines: [`Node.js ${deps.nodeVersion} (>= ${MIN_NODE_MAJOR})`] };
+  return {
+    id: 1,
+    title: 'Runtime',
+    verdict: 'ok',
+    lines: [tenantScope ? 'Runtime ok' : `Node.js ${deps.nodeVersion} (>= ${MIN_NODE_MAJOR})`],
+  };
 }
 
-function sectionConfig(deps: DiagnosticsDeps, set: ReturnType<typeof getAccountSet> | null): DiagnosticSection {
+function sectionConfig(deps: DiagnosticsDeps, set: ReturnType<typeof getAccountSet> | null, tenantScope = false): DiagnosticSection {
   const lines: string[] = [];
   let verdict: Verdict = 'ok';
   let hint: string | undefined;
   let slug: string | undefined;
 
   if (!set || set.aliases.length === 0) {
+    const tenantHint = tenantScope ? (hints()?.render({ kind: 'no_accounts' })?.hint ?? '') : undefined;
     return {
       id: 2,
       title: 'Config',
       verdict: 'fail',
       slug: 'E_NO_ACCOUNTS_CONFIGURED',
       lines: ['No accounts configured.'],
-      hint: 'Add an account: run `npx mcp-google-multi migrate-config` or set GOOGLE_ACCOUNTS.',
+      ...(tenantScope
+        ? (tenantHint ? { hint: tenantHint } : {})
+        : { hint: 'Add an account: run `npx mcp-google-multi migrate-config` or set GOOGLE_ACCOUNTS.' }),
     };
+  }
+  // The config file, process env, working directory and metrics store below
+  // are the operator's host, not the context's: a tenant sees its own count.
+  if (tenantScope) {
+    return { id: 2, title: 'Config', verdict: 'ok', lines: [`${set.aliases.length} account(s) configured`] };
   }
 
   const cfgPath = path.join(configDir(), 'config.json');
@@ -251,7 +280,8 @@ function sectionsTokensAndScopes(deps: DiagnosticsDeps, aliases: string[]): [Dia
     if (r.requestable.length > 0) {
       if (scopeVerdict === 'ok') scopeVerdict = 'warn';
       scopeLines.push(`${alias}: ${r.callable.length} callable, ${r.requestable.length} requested-not-granted`);
-      scopeHint = `Re-auth to grant missing scopes: \`npx mcp-google-multi auth --account ${alias}\`.`;
+      const rendered = hints()?.render({ kind: 'scopes_missing', account: alias });
+      scopeHint = rendered?.hint ?? `Re-auth to grant missing scopes. ${reauthHint(alias)}`;
     } else {
       scopeLines.push(`${alias}: ${r.callable.length} callable, all profile scopes granted`);
     }
@@ -263,7 +293,7 @@ function sectionsTokensAndScopes(deps: DiagnosticsDeps, aliases: string[]): [Dia
   ];
 }
 
-async function sectionApiEnablement(deps: DiagnosticsDeps, aliases: string[]): Promise<DiagnosticSection> {
+async function sectionApiEnablement(deps: DiagnosticsDeps, aliases: string[], tenantScope = false): Promise<DiagnosticSection> {
   if (!deps.probeApi) {
     return { id: 6, title: 'API enablement', verdict: 'unknown', lines: ['Probe not run (no live account probe configured).'] };
   }
@@ -279,8 +309,15 @@ async function sectionApiEnablement(deps: DiagnosticsDeps, aliases: string[]): P
   try {
     results = await deps.probeApi(healthy);
   } catch (e: any) {
-    // Network / transient: WARN with the target, never crash the report.
-    return { id: 6, title: 'API enablement', verdict: 'warn', lines: [`Probe could not complete: ${e?.message ?? e}`] };
+    // Network / transient: WARN with the target, never crash the report. The
+    // raw text can name an egress or proxy host (E7 residue): tenant scope
+    // drops it.
+    return {
+      id: 6,
+      title: 'API enablement',
+      verdict: 'warn',
+      lines: [tenantScope ? 'Probe could not complete.' : `Probe could not complete: ${e?.message ?? e}`],
+    };
   }
   if (results.length === 0) {
     return { id: 6, title: 'API enablement', verdict: 'unknown', lines: [`No probeable service scopes granted on "${healthy}".`] };
@@ -288,13 +325,14 @@ async function sectionApiEnablement(deps: DiagnosticsDeps, aliases: string[]): P
   const disabled = results.filter((r) => r.notEnabled);
   const lines = results.map((r) => `${r.service}: ${r.ok ? 'enabled' : r.notEnabled ? 'NOT ENABLED' : `unknown (${r.message ?? 'error'})`}`);
   if (disabled.length > 0) {
+    const rendered = hints()?.render({ kind: 'apis_disabled', services: disabled.map((r) => ({ service: r.service, api: r.api })) });
     return {
       id: 6,
       title: 'API enablement',
       verdict: 'fail',
       slug: 'E_API_NOT_ENABLED',
       lines,
-      hint: disabled.map((r) => `Enable ${r.service}: ${apiEnableLink(r.api)}`).join('\n'),
+      hint: rendered?.hint ?? disabled.map((r) => `Enable ${r.service}: ${apiEnableLink(r.api)}`).join('\n'),
     };
   }
   return { id: 6, title: 'API enablement', verdict: 'ok', lines: lines.length ? lines : ['(probed account, all enabled)'] };
@@ -373,24 +411,34 @@ export function overallVerdict(sections: DiagnosticSection[]): Verdict {
   return worst;
 }
 
-export async function runDiagnostics(deps: DiagnosticsDeps = DEFAULT_DEPS): Promise<DiagnosticsReport> {
+export async function runDiagnostics(
+  deps: DiagnosticsDeps = DEFAULT_DEPS,
+  opts: { scope?: 'operator' | 'tenant' } = {},
+): Promise<DiagnosticsReport> {
+  // Tenant scope omits the OPERATOR sections: §3 (key provenance = box
+  // infrastructure) and §7 (its owner-gate lines print MCP_OWNER_EMAILS
+  // values — other people's addresses from a tenant's seat), and trims §2 to
+  // the context's own account count.
+  const tenantScope = opts.scope === 'tenant';
   const sections: DiagnosticSection[] = [];
-  sections.push(sectionRuntime(deps));
+  sections.push(sectionRuntime(deps, tenantScope));
 
   const set = deps.accountSet();
-  sections.push(sectionConfig(deps, set));
+  sections.push(sectionConfig(deps, set, tenantScope));
   const aliases = set?.aliases ?? [];
 
-  sections.push(sectionKeys(deps, aliases));
+  if (!tenantScope) sections.push(sectionKeys(deps, aliases));
 
   if (aliases.length > 0) {
     const [tokens, scopes] = sectionsTokensAndScopes(deps, aliases);
     sections.push(tokens, scopes);
-    sections.push(await sectionApiEnablement(deps, aliases));
+    sections.push(await sectionApiEnablement(deps, aliases, tenantScope));
   }
 
-  const http = await sectionHttp(deps, aliases);
-  if (http) sections.push(http);
+  if (!tenantScope) {
+    const http = await sectionHttp(deps, aliases);
+    if (http) sections.push(http);
+  }
 
   return { verdict: overallVerdict(sections), sections };
 }
@@ -412,9 +460,34 @@ export function renderDoctorText(report: DiagnosticsReport): string {
   return out.join('\n');
 }
 
-/** Mask the local-part of an email so a report never carries a full address (BR8). */
+const EMAIL_LOCAL_CHAR = /[A-Za-z0-9._%+-]/;
+const EMAIL_DOMAIN_CHAR = /[A-Za-z0-9.-]/;
+
+/** Mask the local-part of an email so a report never carries a full address
+ * (BR8). A linear scan, not a regex: the `local* @domain` pattern backtracks
+ * polynomially on long local-charset runs without an @ (CodeQL
+ * js/polynomial-redos), and report text can embed arbitrary error strings. */
 function maskEmails(text: string): string {
-  return text.replace(/([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+)/g, '$1***$2');
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '@') {
+      let j = i + 1;
+      while (j < text.length && EMAIL_DOMAIN_CHAR.test(text[j])) j += 1;
+      let k = out.length;
+      while (k > 0 && EMAIL_LOCAL_CHAR.test(out[k - 1])) k -= 1;
+      if (j > i + 1 && k < out.length) {
+        // keep the first local char, mask the rest ('*' is outside the local
+        // charset, so a masked run can never be re-masked by a later @)
+        out = `${out.slice(0, k + 1)}***${text.slice(i, j)}`;
+        i = j;
+        continue;
+      }
+    }
+    out += text[i];
+    i += 1;
+  }
+  return out;
 }
 
 /** Redacted, paste-ready bug report (BR8): verdicts + provenance labels + token
@@ -435,6 +508,28 @@ export function exitCodeFor(report: DiagnosticsReport, strict: boolean): number 
   return 0;
 }
 
+export type DiagnoseContext = Pick<IdentityContext, 'subject' | 'accounts' | 'getClient' | 'tokenStore'>;
+
+/** The engine's account, token and probe reads bound to one context, so a
+ * report never shows (or probes with) another context's accounts. */
+function diagnosticsDepsFor(ctx: DiagnoseContext): DiagnosticsDeps {
+  const health = accountHealthDepsFor(ctx.tokenStore, () => ctx.accounts);
+  const probe = apiProbeDepsFor(ctx.tokenStore.readToken, ctx.getClient);
+  return {
+    ...DEFAULT_DEPS,
+    accountSet: () => {
+      try {
+        return ctx.accounts;
+      } catch {
+        return null;
+      }
+    },
+    accountHealth: (alias) => deriveAccountHealth(alias, health),
+    anyTokensExist: (aliases) => aliases.some((a) => ctx.tokenStore.hasToken(a)),
+    probeApi: (alias) => probeApiEnablement(alias, probe),
+  };
+}
+
 /** Agent-callable structured health report (read-only). Mirrors `doctor`'s
  * engine. Registered as a META tool, like `account_list`: it introspects this
  * server rather than Google data, and as a normal tool it became a service of
@@ -442,7 +537,11 @@ export function exitCodeFor(report: DiagnosticsReport, strict: boolean): number 
  * from already-registered services, and this runs after that), so it was
  * advertised only once something else expanded the surface. The README sends
  * people here when they are stuck, so it has to be findable. */
-export function registerDiagnoseTool(registry: ToolRegistry): void {
+export function registerDiagnoseTool(registry: ToolRegistry, ctx?: DiagnoseContext): void {
+  // A non-owner context gets the tenant-scoped report; only the owner context
+  // (or the context-free CLI surface) keeps the full operator report.
+  const scope: 'operator' | 'tenant' = ctx && !isOwnerContext(ctx) ? 'tenant' : 'operator';
+  const deps = ctx ? diagnosticsDepsFor(ctx) : DEFAULT_DEPS;
   registry.registerMeta(
     'diagnose',
     {
@@ -452,7 +551,7 @@ export function registerDiagnoseTool(registry: ToolRegistry): void {
     },
     async () => {
       try {
-        const result = await runDiagnostics();
+        const result = await runDiagnostics(deps, { scope });
         return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
       } catch (e: any) {
         return { content: [{ type: 'text' as const, text: stringifyEnvelope({

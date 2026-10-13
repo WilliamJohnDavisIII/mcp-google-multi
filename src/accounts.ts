@@ -2,9 +2,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { z } from 'zod';
 import { loadEnvFiles } from './env-load.js';
-import { CONFIG_VERSION, configDir, configFilePath, failStartup, loadConfigFile, mutateConfigFile } from './config-file.js';
+import { ALIAS_RE, CONFIG_VERSION, configDir, configFilePath, failStartup, isReservedAlias, loadConfigFile, mutateConfigFile } from './config-file.js';
 import type { ConfigFile } from './config-file.js';
-import { BUNDLE_CATALOG, closestBundle, resolveBundleAliases } from './scope-catalog.js';
+import { closestBundle, isKnownBundle, resolveBundleAliases } from './scope-catalog.js';
 import type { ScopeProfile } from './scope-catalog.js';
 
 const envLoad = loadEnvFiles();
@@ -45,15 +45,15 @@ function parseCsv(value: string | undefined): string[] {
   return (value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-function accountPaths(alias: string): { tokenPath: string; encPath: string } {
+function accountPaths(alias: string, dir: string = tokenDir): { tokenPath: string; encPath: string } {
   return {
-    tokenPath: path.join(tokenDir, alias, 'token.json'),
-    encPath: path.join(tokenDir, `${alias}.enc`),
+    tokenPath: path.join(dir, alias, 'token.json'),
+    encPath: path.join(dir, `${alias}.enc`),
   };
 }
 
 /** v5 env parser, guards verbatim. Format: GOOGLE_ACCOUNTS="alias1:email1,alias2:email2". */
-function parseEnvAccounts(raw: string, adminAliases: string[]): { aliases: string[]; configs: Record<string, AccountConfig> } {
+function parseEnvAccounts(raw: string, adminAliases: string[], dir: string = tokenDir): { aliases: string[]; configs: Record<string, AccountConfig> } {
   const configs: Record<string, AccountConfig> = {};
   const aliases: string[] = [];
 
@@ -79,7 +79,7 @@ function parseEnvAccounts(raw: string, adminAliases: string[]): { aliases: strin
 
     // Restrict alias to a safe charset so it can't escape `tokenDir` via path traversal
     // (e.g. "../../etc/passwd:foo@bar.com" in .env).
-    if (!/^[a-zA-Z0-9_-]+$/.test(alias) || ['__proto__', 'constructor', 'prototype'].includes(alias)) {
+    if (!ALIAS_RE.test(alias) || isReservedAlias(alias)) {
       throw new Error(
         `Invalid alias "${alias}". Allowed characters: letters, digits, underscore, hyphen.`,
       );
@@ -94,7 +94,7 @@ function parseEnvAccounts(raw: string, adminAliases: string[]): { aliases: strin
     aliases.push(alias);
     configs[alias] = {
       email,
-      ...accountPaths(alias),
+      ...accountPaths(alias, dir),
       admin: adminAliases.includes(alias) || undefined,
       source: 'env',
     };
@@ -131,7 +131,11 @@ export function resolveAccounts(
   env: NodeJS.ProcessEnv = process.env,
   filePath = configFilePath(),
   onInvalid: 'exit' | 'throw' = 'exit',
+  // emptyOk: zero accounts is a valid set, not an error, even with 'throw'
+  // (a context that has linked nothing yet). An invalid file still fails.
+  opts: { tokenDir?: string; emptyOk?: boolean } = {},
 ): AccountSet {
+  const dir = opts.tokenDir ?? tokenDir;
   const adminEnv = parseCsv(env.GOOGLE_ADMIN_ACCOUNTS);
   const rawEnv = env.GOOGLE_ACCOUNTS;
 
@@ -152,7 +156,7 @@ export function resolveAccounts(
           '"admin" is not a global bundle: grant it per account via GOOGLE_ADMIN_ACCOUNTS or an "admin: true" scope profile.',
         );
       }
-      if (!(bundle in BUNDLE_CATALOG)) {
+      if (!isKnownBundle(bundle)) {
         const hint = closestBundle(bundle);
         fail(
           'E_UNKNOWN_BUNDLE',
@@ -169,7 +173,7 @@ export function resolveAccounts(
   }
 
   if (rawEnv && rawEnv.trim() !== '') {
-    const { aliases, configs } = parseEnvAccounts(rawEnv, adminEnv);
+    const { aliases, configs } = parseEnvAccounts(rawEnv, adminEnv, dir);
     materializeFirstRun(aliases, configs, filePath);
     const def = resolveDefaultAccount(env, null, aliases, fail);
     return {
@@ -197,7 +201,7 @@ export function resolveAccounts(
     // empty (BR-4), enforced by assertServerAccountsConfigured() in index.ts.
     // The dispatch-path reload ('throw') still throws so a mid-session emptied
     // config.json keeps the last-good registry (BR-7) instead of dropping tools.
-    if (onInvalid === 'throw') {
+    if (onInvalid === 'throw' && !opts.emptyOk) {
       throw new Error(`E_NO_ACCOUNTS_CONFIGURED: ${noAccountsMessage()}`);
     }
     return {
@@ -217,7 +221,7 @@ export function resolveAccounts(
   for (const [name, profile] of Object.entries(config?.scopeProfiles ?? {})) {
     const bundles = resolveBundleAliases(profile.bundles);
     for (const bundle of bundles) {
-      if (!(bundle in BUNDLE_CATALOG)) {
+      if (!isKnownBundle(bundle)) {
         const hint = closestBundle(bundle);
         fail(
           'E_UNKNOWN_BUNDLE',
@@ -246,7 +250,7 @@ export function resolveAccounts(
     aliases.push(alias);
     configs[alias] = {
       email: entry.email,
-      ...accountPaths(alias),
+      ...accountPaths(alias, dir),
       scopeProfile: entry.scopeProfile,
       admin: adminEnv.length > 0 ? adminEnv.includes(alias) : entry.admin,
       source: 'config',
@@ -285,7 +289,7 @@ function resolveDefaultAccount(
   return { defaultAccount: value, defaultAccountSource: fromEnv ? 'env' : 'config' };
 }
 
-function fileStamp(filePath: string, version: number): string {
+export function fileStamp(filePath: string, version: number): string {
   try {
     return `${version}:${fs.statSync(filePath).mtimeMs}`;
   } catch {
@@ -379,6 +383,7 @@ export const ACCOUNTS = current.aliases;
  * enum actually accepts, and naming a runtime-added alias as valid while
  * rejecting it would be a lie. */
 export function unknownAliasMessage(aliases: readonly string[], selectors = false): string {
+  if (aliases.length === 0) return 'No Google account is configured yet. Add one with account_add.';
   const all = selectors ? '; "*" for all accounts' : '';
   const csv = selectors && aliases.length > 1 ? `; or a CSV subset like "${aliases.slice(0, 2).join(',')}"` : '';
   return `Unknown account alias. Valid: ${aliases.join(', ')}${all}${csv}. Run account_list if accounts changed since this server started.`;
@@ -399,6 +404,40 @@ export function accountAliasSchemaFor(aliases: readonly string[]): z.ZodType<str
 
 /** Shared, load-time snapshot used by every tool's `account` field. */
 export const accountAliasSchema: z.ZodType<string> = accountAliasSchemaFor(ACCOUNTS);
+
+/** Live account argument: validates at PARSE time against the accessor's
+ * CURRENT aliases, so an alias added mid-session (account_add, or a tenant
+ * alias link) is immediately valid on already-registered tools — a baked
+ * z.enum freezes the boot-time set until restart. An empty set stays
+ * permissive (same empty-safe rule as above); dispatch still resolves the
+ * alias against the live registry. */
+export function accountArgLive(aliases: () => readonly string[]): z.ZodType<string> {
+  return z.string().check(liveAccountCheck(aliases, false));
+}
+
+// The check instance survives the clones .describe() and .optional() make,
+// so it is what marks a field as an account selector for the registry.
+const LIVE_ACCOUNT_CHECKS = new WeakSet<object>();
+
+/** The live membership check behind accountArgLive and the fan-out field;
+ * `selectors` also admits "*". An empty set stays permissive. */
+export function liveAccountCheck(aliases: () => readonly string[], selectors: boolean) {
+  const check = z.superRefine<string>((value, ctx) => {
+    const current = aliases();
+    if (current.length === 0 || current.includes(value) || (selectors && value === '*')) return;
+    ctx.addIssue({ code: 'custom', message: unknownAliasMessage(current, selectors) });
+  });
+  LIVE_ACCOUNT_CHECKS.add(check);
+  return check;
+}
+
+/** True for a field built on liveAccountCheck, optional or not. */
+export function isLiveAccountField(field: unknown): boolean {
+  type Def = { type?: string; innerType?: unknown; checks?: unknown[] };
+  let def = (field as { _zod?: { def?: Def } } | undefined)?._zod?.def;
+  if (def?.type === 'optional') def = (def.innerType as { _zod?: { def?: Def } } | undefined)?._zod?.def;
+  return def?.checks?.some((c) => LIVE_ACCOUNT_CHECKS.has(c as object)) ?? false;
+}
 
 /**
  * BR-4: the stdio/http SERVER never boots with an empty registry — a fresh user

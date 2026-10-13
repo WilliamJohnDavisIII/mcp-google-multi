@@ -1,9 +1,11 @@
+import { reauthHint } from '../reauth-hint.js';
 import * as fs from 'node:fs';
 import type { ToolRegistry } from '../registry.js';
-import { getAccountSet, refreshAccountSetIfStale } from '../accounts.js';
+import { getAccountSet, refreshAccountSetIfStale, type AccountSet } from '../accounts.js';
 import { buildScopesReport, type ScopesReport } from '../scope-observability.js';
 import { getAdminAccounts, resolveScopesForAccount } from '../auth.js';
-import { hasToken, readToken } from '../token-store.js';
+import { hasToken, readToken, type TokenStore } from '../token-store.js';
+import { hints } from '../hint-provider.js';
 
 export interface AccountHealthDeps {
   hasToken: (alias: string) => boolean;
@@ -14,14 +16,26 @@ export interface AccountHealthDeps {
    * "registered but not requestable" view (B9). account_list stays compact:
    * its report universe is profile ∪ granted only. */
   registeredScopes?: () => string[];
+  /** Account view health is derived against; absent = the global registry. */
+  accounts?: () => AccountSet;
 }
 
-const DEFAULT_DEPS: AccountHealthDeps = {
-  hasToken,
-  readToken,
-  fileExists: fs.existsSync,
-  now: Date.now,
-};
+/** Health deps over one context's token store (and, optionally, its account
+ * view); the module-level functions are the single owner's store. */
+export function accountHealthDepsFor(
+  store: Pick<TokenStore, 'hasToken' | 'readToken'>,
+  accounts?: () => AccountSet,
+): AccountHealthDeps {
+  return {
+    hasToken: store.hasToken,
+    readToken: store.readToken,
+    fileExists: fs.existsSync,
+    now: Date.now,
+    ...(accounts ? { accounts } : {}),
+  };
+}
+
+const DEFAULT_DEPS: AccountHealthDeps = accountHealthDepsFor({ hasToken, readToken });
 
 export type TokenStatus = 'ok' | 'expired_refreshable' | 'needs_reauth' | 'missing' | 'decrypt_error';
 
@@ -36,9 +50,10 @@ export interface AccountHealth {
 }
 
 export function deriveAccountHealth(alias: string, deps: AccountHealthDeps = DEFAULT_DEPS): AccountHealth {
-  const config = getAccountSet().configs[alias];
-  const admin = getAdminAccounts().includes(alias);
-  const configured = resolveScopesForAccount(alias);
+  const set = (deps.accounts ?? getAccountSet)();
+  const config = set.configs[alias];
+  const admin = getAdminAccounts(set).includes(alias);
+  const configured = resolveScopesForAccount(alias, set);
   // BR-10: env-sourced accounts are not persisted in config.json, so the
   // account wizard cannot edit them — the deployer edits env instead.
   const base = {
@@ -56,13 +71,18 @@ export function deriveAccountHealth(alias: string, deps: AccountHealthDeps = DEF
 
   if (!deps.hasToken(alias)) {
     const legacy = deps.fileExists(config.tokenPath);
+    const rendered = legacy
+      ? hints()?.render({ kind: 'legacy_plaintext_token', account: alias })
+      : hints()?.render({ kind: 'reauth', account: alias });
     return {
       ...base,
       token: {
         status: 'missing',
-        hint: legacy
-          ? 'Plaintext token.json found — run: npx mcp-google-multi migrate-tokens'
-          : `Run: npx mcp-google-multi auth --account ${alias}`,
+        hint:
+          rendered?.hint ??
+          (legacy
+            ? 'Plaintext token.json found — run: npx mcp-google-multi migrate-tokens'
+            : reauthHint(alias)),
       },
       scopes: noScopes,
     };
@@ -72,9 +92,10 @@ export function deriveAccountHealth(alias: string, deps: AccountHealthDeps = DEF
   try {
     token = deps.readToken(alias);
   } catch {
+    const rendered = hints()?.render({ kind: 'token_unreadable', account: alias });
     return {
       ...base,
-      token: { status: 'decrypt_error', hint: 'Wrong MASTER_KEY or corrupt token file — re-auth or restore the key.' },
+      token: { status: 'decrypt_error', hint: rendered?.hint ?? 'Wrong MASTER_KEY or corrupt token file — re-auth or restore the key.' },
       scopes: noScopes,
     };
   }
@@ -97,9 +118,9 @@ export function deriveAccountHealth(alias: string, deps: AccountHealthDeps = DEF
       expiryDate: expiry !== undefined ? new Date(expiry).toISOString() : undefined,
       hint:
         status === 'needs_reauth'
-          ? `Run: npx mcp-google-multi auth --account ${alias}`
+          ? (hints()?.render({ kind: 'reauth', account: alias })?.hint ?? reauthHint(alias))
           : missing.length > 0
-            ? 'Re-auth to grant the missing scopes'
+            ? (hints()?.render({ kind: 'scopes_missing', account: alias })?.hint ?? 'Re-auth to grant the missing scopes')
             : undefined,
     },
     scopes: report,
@@ -124,14 +145,16 @@ export function registerAccountTools(registry: ToolRegistry, deps: AccountHealth
     },
     async () => {
       refreshAccountSetIfStale();
+      const set = registry.accountSet();
+      const health: AccountHealthDeps = { ...deps, accounts: () => set };
       return {
         content: [
           {
             type: 'text' as const,
             text: JSON.stringify({
-              defaultAccount: getAccountSet().defaultAccount ?? null,
-              defaultAccountSource: getAccountSet().defaultAccountSource ?? null,
-              accounts: getAccountSet().aliases.map((alias) => deriveAccountHealth(alias, deps)),
+              defaultAccount: set.defaultAccount ?? null,
+              defaultAccountSource: set.defaultAccountSource ?? null,
+              accounts: set.aliases.map((alias) => deriveAccountHealth(alias, health)),
             }),
           },
         ],

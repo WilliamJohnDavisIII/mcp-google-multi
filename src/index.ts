@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // First import: triggers accounts.js module load (env files + registry) before
 // anything else. Named to also pull the server-only empty-registry guard (BR-4).
-import { assertServerAccountsConfigured, getAccountSet } from './accounts.js';
+import { assertServerAccountsConfigured } from './accounts.js';
+import { accountsAssertRequired, assertNoEnvAccountsMode, assertNoEnvOptionalScopesMode, isMultiTenantBoot, mtBootGates } from './boot-gates.js';
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -9,21 +10,13 @@ import path from 'node:path';
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { Transport } from "@modelcontextprotocol/server";
-import { GENERATED_SERVICES } from './tools/generated/index.js';
-import { GENERATED_GATES, SERVICES, unknownToolMessage } from './services.js';
-import { ToolRegistry, resolveDiscoveryMode, type DiscoveryMode } from './registry.js';
-import { registerDiscoverTools } from './discover.js';
-import { registerEscapeTools } from './tools/google-api.js';
-import { registerAccountTools } from './tools/accounts-tool.js';
-import { registerDiagnoseTool } from './doctor.js';
-import { registerAccountWizardTools } from './tools/account-wizard.js';
-import { getToolsets, toolsetEnabled } from './toolsets.js';
+import { resolveDiscoveryMode } from './registry.js';
 import { isAllowed, describePolicy } from './write-control.js';
-import { buildIdentityContext, type IdentityContext } from './identity.js';
+import { buildIdentityContext } from './identity.js';
+import { buildRegistry, requestHooksFor } from './compose.js';
 import { registerSetupPrompt } from './setup-prompt.js';
 import { applyNetTuning } from './net-tuning.js';
-import { argNormalizationEnabled, withArgNormalization, withValidationEnvelope, type StrictArgOptions } from './arg-normalize.js';
-import { unknownArgMode } from './arg-strict.js';
+import { withArgNormalization, withValidationEnvelope } from './arg-normalize.js';
 import { envValueSource } from './env-load.js';
 import { loadConfigFile } from './config-file.js';
 import { initUsageMetrics, resolveUsageMetrics, sourceLabel, type Metrics } from './usage-metrics.js';
@@ -32,71 +25,6 @@ applyNetTuning();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf-8'));
-
-/** Unknown-argument screening options, or undefined when the feature is off.
- * Shared by both transports so a mistyped argument behaves identically. */
-function strictArgOptions(registry: ToolRegistry, metrics: Metrics | null): StrictArgOptions | undefined {
-  const mode = unknownArgMode();
-  if (mode === 'off') return undefined;
-  return {
-    mode,
-    declaredFor: (tool) => registry.declaredKeys(tool),
-    siblingsFor: (tool, keys) => registry.siblingSpellings(tool, keys),
-    unknownTool: (name) => unknownToolMessage(registry, name),
-    onDrop: metrics ? (tool, keys) => metrics.recordArgDrop(tool, keys) : undefined,
-  };
-}
-
-function buildRegistry(server: McpServer, ctx: IdentityContext, mode?: DiscoveryMode, metrics: Metrics | null = null): ToolRegistry {
-  const policy = ctx.policy;
-  const registry = new ToolRegistry(server, policy, mode, metrics);
-  const toolsets = getToolsets();
-  if (toolsets !== 'all') {
-    const known = new Set([...SERVICES.map((s) => s.name), ...GENERATED_SERVICES.map((s) => s.name)]);
-    for (const requested of toolsets) {
-      if (!known.has(requested)) {
-        process.stderr.write(`GOOGLE_TOOLSETS: unknown service "${requested}" ignored\n`);
-      }
-    }
-  }
-  for (const svc of SERVICES) {
-    if (!toolsetEnabled(toolsets, svc.name)) continue;
-    if (svc.enabled && !svc.enabled()) {
-      if (toolsets !== 'all') {
-        const hint = svc.name === 'admin' ? 'set admin on an account/profile (or GOOGLE_ADMIN_ACCOUNTS)' : `add "${svc.name}" to an account's scope profile (or legacy GOOGLE_OPTIONAL_SCOPES)`;
-        process.stderr.write(`GOOGLE_TOOLSETS: "${svc.name}" requested but not enabled — ${hint}\n`);
-      }
-      continue;
-    }
-    svc.register(registry);
-  }
-  for (const gen of GENERATED_SERVICES) {
-    if (!toolsetEnabled(toolsets, gen.name)) continue;
-    const curated = SERVICES.find((s) => s.name === gen.name);
-    const gate = curated?.enabled ?? GENERATED_GATES[gen.name]?.enabled;
-    if (gate && !gate()) {
-      if (!curated && toolsets !== 'all') {
-        process.stderr.write(`GOOGLE_TOOLSETS: "${gen.name}" requested but not enabled — ${GENERATED_GATES[gen.name].hint}\n`);
-      }
-      continue;
-    }
-    gen.register(registry);
-  }
-  if (registry.services().length === 0) {
-    const known = [...new Set([...SERVICES.map((s) => s.name), ...GENERATED_SERVICES.map((s) => s.name)])].sort();
-    throw new Error(
-      `GOOGLE_TOOLSETS="${process.env.GOOGLE_TOOLSETS ?? ''}" selected no enabled services. ` +
-        `Known services: ${known.join(', ')}. ` +
-        `Note: optional services need their bundle in an account's scope profile (or legacy GOOGLE_OPTIONAL_SCOPES); admin needs an admin account/profile.`,
-    );
-  }
-  registerDiscoverTools(registry, policy);
-  registerEscapeTools(registry, policy);
-  registerAccountTools(registry);
-  registerDiagnoseTool(registry);
-  registerAccountWizardTools(registry, server);
-  return registry;
-}
 
 async function main() {
   if (process.argv.includes('auth')) {
@@ -213,16 +141,8 @@ async function main() {
     return;
   }
 
-  // BR-4: the SERVER never boots with an empty registry. The bootstrap and
-  // diagnostic CLIs above already returned; a fresh user configures accounts
-  // (env / migrate-config / account import / auth) before the server runs.
-  assertServerAccountsConfigured();
-
-  // Resolve (or provision) the master key BEFORE serving: the hard guard is
-  // specced "fatal at startup", never mid-dispatch.
-  const { resolveMasterKey } = await import('./master-key.js');
-  resolveMasterKey();
-
+  // Transport derivation FIRST: the accounts gate below is transport-aware
+  // (a multi-tenant HTTP deploy legitimately boots with zero accounts).
   const { resolveHttpConfig, transportIncludesHttp } = await import('./http-config.js');
   let httpCfg;
   try {
@@ -233,6 +153,22 @@ async function main() {
   }
   const wantStdio = httpCfg.transport === 'stdio' || httpCfg.transport === 'both';
   const wantHttp = transportIncludesHttp(httpCfg.transport);
+
+  // BR-4: the SERVER never boots with an empty registry — stdio always, HTTP
+  // when single-owner. The bootstrap and diagnostic CLIs above already
+  // returned. A multi-tenant boot instead refuses the two process-wide env
+  // vectors that would leak one operator's accounts/scopes into every tenant.
+  const mt = isMultiTenantBoot();
+  if (accountsAssertRequired(wantStdio, mt)) assertServerAccountsConfigured();
+  if (mt) {
+    assertNoEnvAccountsMode();
+    assertNoEnvOptionalScopesMode();
+  }
+
+  // Resolve (or provision) the master key BEFORE serving: the hard guard is
+  // specced "fatal at startup", never mid-dispatch.
+  const { resolveMasterKey } = await import('./master-key.js');
+  resolveMasterKey();
 
   // Local usage metrics: fail-closed resolve, self-announcing source, null
   // when off (no wrapper, no dir, nothing initializes). One instance per
@@ -273,35 +209,33 @@ async function main() {
   if (wantStdio) {
     const server = new McpServer({ name: 'mcp-google-multi', version: pkg.version });
     const stdioMetrics = initMetricsFor('stdio', resolveDiscoveryMode());
-    const registry = buildRegistry(server, buildIdentityContext(process.env, { transport: 'stdio' }), undefined, stdioMetrics);
+    const stdioCtx = buildIdentityContext(process.env, { transport: 'stdio' });
+    const registry = buildRegistry(server, stdioCtx, undefined, stdioMetrics);
     registry.installListHandler();
     registerSetupPrompt(server);
+    const stdioHooks = requestHooksFor(registry, stdioCtx, stdioMetrics);
     // Outbound runs outermost-first, so the composition is deliberate: the
     // envelope rewrite is INNERMOST (last to touch the frame), the tap sits
     // above it (classifying the ORIGINAL validation prose), arg normalization
     // outermost. The tap only counts outbound JSON-RPC error frames (no
     // handler ran) plus id->tool names.
-    let transport: Transport = withValidationEnvelope(new StdioServerTransport(), {
-      isKnownTool: (n) => registry.hasTool(n),
-      defaultAccount: () => getAccountSet().defaultAccount,
-    });
+    let transport: Transport = withValidationEnvelope(new StdioServerTransport(), stdioHooks.validationEnvelope);
     if (stdioMetrics) {
       const { tapUsageMetrics } = await import('./metrics-tap.js');
       transport = tapUsageMetrics(transport, stdioMetrics, (n) => registry.hasTool(n));
     }
-    const strictStdio = strictArgOptions(registry, stdioMetrics);
     await server.connect(
-      argNormalizationEnabled() || strictStdio
+      stdioHooks.argShapeFor || stdioHooks.strictArgs
         ? withArgNormalization(
             transport,
             // Gated exactly as the HTTP leg gates `argShapeFor`. Passing the
             // shape unconditionally made stdio rename keys while
             // GOOGLE_ARG_NORMALIZE=off, so the same call succeeded on stdio
             // and failed on HTTP once screening rejects.
-            argNormalizationEnabled() ? (n) => registry.argShape(n) : () => undefined,
+            stdioHooks.argShapeFor ?? (() => undefined),
             undefined,
             stdioMetrics ? (tool, n) => stdioMetrics.recordArgFix(tool, n) : undefined,
-            strictStdio,
+            stdioHooks.strictArgs,
           )
         : transport,
     );
@@ -309,14 +243,22 @@ async function main() {
 
   if (wantHttp) {
     const { HttpTransportHost, parseOwnerEmails } = await import('./http-transport.js');
-    // BR3 / C13: the owner allowlist is the entire multi-tenant collapse; refuse
-    // to open an ungated HTTP endpoint.
     const owners = parseOwnerEmails(process.env);
-    if (owners.length === 0) {
-      process.stderr.write(
-        'E_OWNER_EMAILS_REQUIRED: MCP_TRANSPORT includes http but MCP_OWNER_EMAILS is empty. Set MCP_OWNER_EMAILS to the Google email(s) allowed to authenticate.\n',
-      );
-      process.exit(1);
+    const gates = mtBootGates();
+    if (gates?.multiTenant) {
+      // Same fail-fast SHAPE, different condition: an ungated HTTP endpoint
+      // must never boot; under tenancy the gate is "a valid provisioning
+      // mechanism exists", not a flat owner allowlist.
+      gates.assertProvisioningGate();
+    } else {
+      // BR3 / C13: the owner allowlist is the entire multi-tenant collapse;
+      // refuse to open an ungated HTTP endpoint.
+      if (owners.length === 0) {
+        process.stderr.write(
+          'E_OWNER_EMAILS_REQUIRED: MCP_TRANSPORT includes http but MCP_OWNER_EMAILS is empty. Set MCP_OWNER_EMAILS to the Google email(s) allowed to authenticate.\n',
+        );
+        process.exit(1);
+      }
     }
     // BR7: stateless HTTP cannot push tools/list_changed, so it forces curated.
     const configuredMode = (process.env.GOOGLE_DISCOVERY ?? '').trim().toLowerCase();
@@ -325,33 +267,24 @@ async function main() {
     }
     const httpServer = new McpServer({ name: 'mcp-google-multi', version: pkg.version });
     const httpMetrics = initMetricsFor('http', 'curated');
-    const registry = buildRegistry(httpServer, buildIdentityContext(process.env, { transport: 'http' }), 'curated', httpMetrics);
+    const httpCtx = buildIdentityContext(process.env, { transport: 'http' });
+    const registry = buildRegistry(httpServer, httpCtx, 'curated', httpMetrics);
     registry.installListHandler();
     registerSetupPrompt(httpServer);
 
     // B13: mount the OAuth 2.1 AS (legs A + B) + the Bearer authenticator.
-    const { buildAuthServer } = await import('./oauth-as.js');
+    const { buildAuthServer, verifiedEmailFromIdToken } = await import('./oauth-as.js');
     const { jwtSecretFrom } = await import('./mcp-token.js');
     const { resolveJwtKey, resolveMasterKeyForDispatch } = await import('./master-key.js');
     const { OAuth2Client } = await import('googleapis-common');
-    const { writeToken } = await import('./token-store.js');
+    const { readToken, writeToken } = await import('./token-store.js');
     const { resolveScopesForAccount } = await import('./auth.js');
+    const { ownerAuthUrlOptions } = await import('./oauth-consent.js');
+    const { scopeGrantDiff, setWizardHttpConsent } = await import('./tools/account-wizard.js');
     const { configDir } = await import('./config-file.js');
     const { getAccountSet } = await import('./accounts.js');
     const googleClient = () =>
       new OAuth2Client(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, `${httpCfg.publicUrl}/callback`);
-    // Only trust the id_token email when Google marks it verified (#8).
-    const verifiedEmailFromIdToken = (idToken?: string): string | undefined => {
-      if (!idToken) return undefined;
-      try {
-        const [, payload] = idToken.split('.');
-        const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8')) as { email?: string; email_verified?: boolean | string };
-        const verified = claims.email_verified === true || claims.email_verified === 'true';
-        return verified ? claims.email : undefined;
-      } catch {
-        return undefined;
-      }
-    };
     const authServer = buildAuthServer(
       {
         base: httpCfg.publicUrl,
@@ -364,20 +297,8 @@ async function main() {
         refreshStorePath: path.join(configDir(), 'mcp-tokens.enc'),
       },
       {
-        buildGoogleAuthUrl: ({ flow, alias, state }) => {
-          if (flow === 'alias_reauth' && alias) {
-            const cfg = getAccountSet().configs[alias];
-            // openid+email so /callback can bind the returned identity to the alias.
-            return googleClient().generateAuthUrl({
-              access_type: 'offline',
-              prompt: 'consent',
-              scope: [...new Set([...resolveScopesForAccount(alias), 'openid', 'email'])],
-              login_hint: cfg?.email,
-              state,
-            });
-          }
-          return googleClient().generateAuthUrl({ scope: ['openid', 'email'], prompt: 'select_account', state });
-        },
+        buildGoogleAuthUrl: ({ flow, alias, state }) =>
+          googleClient().generateAuthUrl(ownerAuthUrlOptions({ flow, alias, state }, (a) => resolveScopesForAccount(a))),
         exchangeCode: async (code, flow) => {
           const { tokens } = await googleClient().getToken(code);
           const email = verifiedEmailFromIdToken(tokens.id_token ?? undefined);
@@ -386,14 +307,25 @@ async function main() {
           return { tokens: flow === 'owner_gate' ? {} : (tokens as Record<string, unknown>), email };
         },
         writeToken: (alias, tokens) => writeToken(alias, tokens),
+        missingScopes: (alias, granted) => scopeGrantDiff(resolveScopesForAccount(alias), granted),
+        hasToken: (alias) => {
+          try {
+            return readToken(alias) != null;
+          } catch {
+            return false; // undecryptable: nothing usable to keep
+          }
+        },
         aliasEmail: (alias) => getAccountSet().configs[alias]?.email,
         log: (l) => process.stderr.write(`[as] ${l}\n`),
       },
     );
-    // BV-1: over HTTP, a dead/missing per-account token surfaces a clickable
-    // re-auth link into the AS's alias_reauth flow instead of a stdio CLI hint.
-    const { setHttpReauthBase } = await import('./reauth-hint.js');
-    setHttpReauthBase(httpCfg.publicUrl);
+    // BV-1: over HTTP, a dead/missing per-account token surfaces a clickable,
+    // signed re-auth link into the AS's alias_reauth flow instead of a CLI hint.
+    const { setHttpReauthLink } = await import('./reauth-hint.js');
+    setHttpReauthLink((alias) => authServer.reauthLink(alias));
+    // Wizard consent over HTTP: hand out the same signed link instead of
+    // binding a loopback listener.
+    setWizardHttpConsent({ mintConsentUrl: (alias) => authServer.reauthLink(alias) });
 
     let httpTap: ((t: Transport) => Transport) | undefined;
     if (httpMetrics) {
@@ -408,14 +340,9 @@ async function main() {
       authenticate: authServer.authenticate,
       routes: authServer.routes,
       log: (l) => process.stderr.write(`[http] ${l}\n`),
-      argShapeFor: argNormalizationEnabled() ? (n) => registry.argShape(n) : undefined,
+      ...requestHooksFor(registry, httpCtx, httpMetrics),
       metricsTap: httpTap,
-      validationEnvelope: {
-        isKnownTool: (n: string) => registry.hasTool(n),
-        defaultAccount: () => getAccountSet().defaultAccount,
-      },
       onArgRename: httpMetrics ? (tool: string, n: number) => httpMetrics.recordArgFix(tool, n) : undefined,
-      strictArgs: strictArgOptions(registry, httpMetrics),
     });
     await host.start();
     process.stderr.write(`HTTP transport listening on http://${httpCfg.host}:${httpCfg.port} (public ${httpCfg.publicUrl})\n`);

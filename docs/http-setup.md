@@ -199,7 +199,7 @@ Once the server answers on `https://mcp.example.com/health`:
 1. In [claude.ai](https://claude.ai) → **Settings → Connectors → Add custom connector**, paste the **MCP endpoint**: `https://mcp.example.com/mcp`.
 2. Claude discovers the authorization server (protected-resource metadata → AS metadata → `/authorize`) and opens a sign-in window.
 3. Sign in with an account listed in `MCP_OWNER_EMAILS`. That gates access; it does **not** by itself grant any Gmail/Drive scope.
-4. Each Google alias is authorized separately the first time a tool touches it (per-alias re-auth), so a connector can drive several accounts without re-running the owner gate.
+4. Each Google alias is authorized separately the first time a tool touches it (per-alias re-auth), so a connector can drive several accounts without re-running the owner gate. The re-auth link in the tool's error is signed by the server and valid for an hour; an expired or hand-built link is refused, so ask the tool again for a fresh one.
 
 For **Claude Code** over HTTP: `claude mcp add --transport http gmulti https://mcp.example.com/mcp`.
 
@@ -213,7 +213,7 @@ Putting the server on the internet has real consequences — read these before y
 |---|---|
 | **Cloudflare (or the PaaS) sees plaintext** | The tunnel/platform **terminates TLS**, so it can see the bearer token and every Gmail/Drive byte in transit. This is a trust boundary, not a bug: you are trusting your tunnel provider the same way you trust your DNS. If that's unacceptable, don't expose the server. |
 | **The owner gate is the whole defense** | `MCP_OWNER_EMAILS` decides who may authenticate at all. Keep it to the accounts you actually own. An empty or over-broad list collapses the multi-tenant boundary. |
-| **Public endpoints invite abuse** | `/authorize` and `/token` are reachable by anyone. The server caps its replay-guard and CIMD fetches, but a public deployment should sit behind **Cloudflare WAF / rate-limiting** (e.g. a rate rule on `/authorize` and `/token`). Configure this in your Cloudflare dashboard. |
+| **Public endpoints invite abuse** | `/authorize`, `/callback` and `/token` are reachable by anyone. The server bounds its replay guard and CIMD fetches and fails closed: 100,000 requests to `/authorize` in any 10-minute window fill its 100,000-slot guard (about 170 a second keep it full) and block every new sign-in with 503 `E_SIGNIN_BUSY`, for up to 10 minutes after a burst, rather than letting a spent sign-in step through. A public deployment should sit behind a per-IP rate limit, e.g. **Cloudflare WAF / rate-limiting** rules on `/authorize`, `/callback` and `/token`. Configure this in your Cloudflare dashboard. |
 | **Never bake secrets into artifacts** | Secrets go in at runtime only — `--env-file`, the platform's secret store, or the OS keychain. `.dockerignore` keeps `.env`/`*.enc`/`master.key` out of image layers; the deploy templates mark every secret `sync: false`. |
 | **`MASTER_KEY` must persist** | Any platform that auto-generates it must persist it across redeploys (Render's `generateValue` does). A regenerated key when tokens exist is a hard-guarded brick, so the server refuses to start rather than silently lose your tokens. |
 

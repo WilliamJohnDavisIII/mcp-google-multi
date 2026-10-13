@@ -1,18 +1,22 @@
 // B13 in-call re-auth (BV-1): a dead/missing per-account Google token is a
 // leg-C failure. Over stdio the fix is the `auth --account` CLI; over HTTP the
-// user cannot run a CLI, so the hint becomes a clickable link into the AS's
-// clientless alias_reauth flow (${BASE}/authorize?flow=alias_reauth&alias=…).
-// The HTTP bootstrap sets the base when the AS starts; stdio never does.
+// user cannot run a CLI, so the hint becomes a clickable, server-signed link
+// into the AS's clientless alias_reauth flow (AuthServer.reauthLink). The HTTP
+// bootstrap installs the linker when the AS starts; stdio never does.
 
-let httpReauthBase: string | null = null;
+import { hints } from './hint-provider.js';
 
-export function setHttpReauthBase(base: string | null): void {
-  httpReauthBase = base;
+let httpReauthLink: ((alias: string) => string) | null = null;
+
+export function setHttpReauthLink(linker: ((alias: string) => string) | null): void {
+  httpReauthLink = linker;
 }
 
 export function reauthHint(account: string): string {
-  if (httpReauthBase) {
-    return `Re-authenticate "${account}" in your browser, then retry: ${httpReauthBase}/authorize?flow=alias_reauth&alias=${encodeURIComponent(account)}`;
+  const rendered = hints()?.render({ kind: 'reauth', account });
+  if (rendered) return rendered.hint;
+  if (httpReauthLink) {
+    return `Re-authenticate "${account}" in your browser, then retry: ${httpReauthLink(account)}`;
   }
   return `Run: npx mcp-google-multi auth --account ${account}`;
 }
