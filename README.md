@@ -55,6 +55,20 @@ New to all this? It's written for someone who just installed Claude Code and has
 
 **Go deeper:** [Configuration reference](./docs/configuration.md) · [What's covered](./COVERAGE.md) · [Features tour](./docs/features.md) · [Remote / HTTP setup](./docs/http-setup.md) · [Secrets in a vault](./docs/secrets.md) · [Local usage metrics](./docs/usage-metrics.md) · [Migrating to v6](./MIGRATION-v6.md) · [Security policy](./SECURITY.md) · [Roadmap](https://github.com/bakissation/mcp-google-multi/milestones)
 
+## Agent skill
+
+The repo and the npm package both ship an [Agent Skill](https://code.claude.com/docs/en/skills) at `skills/google-workspace/`: a hand-written `SKILL.md` covering account selection, the discover step, incremental Gmail sweeps, keeping results small, write profiles, and the escape hatch, plus a `reference/` folder with a generated argument table per service. Loading it gets an agent calling this server's tools correctly without guessing argument names.
+
+To install it for Claude Code, copy or symlink the `skills/google-workspace` folder into `~/.claude/skills/` (every project) or a project's own `.claude/skills/` (that project only):
+
+```bash
+# from a cloned copy of this repo
+ln -s "$(pwd)/skills/google-workspace" ~/.claude/skills/google-workspace
+
+# from the installed npm package
+ln -s "$(npm root -g)/mcp-google-multi/skills/google-workspace" ~/.claude/skills/google-workspace
+```
+
 ## Maintainer, sponsor & license
 
 Built and maintained by **Abdelbaki Berkati** — [berkati.xyz](https://berkati.xyz) · [@bakissation](https://github.com/bakissation). [Read the case study →](https://berkati.xyz/case-studies/mcp-google-multi/)
