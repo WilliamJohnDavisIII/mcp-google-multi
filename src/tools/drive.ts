@@ -426,6 +426,14 @@ export function registerDriveTools(server: ToolRegistry, deps: CuratedToolDeps =
       try {
         let media: { mimeType: string; body: Readable };
         if (hasBase64) {
+          const maxB64Length = Math.ceil(MAX_UPLOAD_BASE64_BYTES / 3) * 4 + 4;
+          if (contentBase64!.length > maxB64Length) {
+            return invalidParams(
+              account as Account,
+              `Base64-encoded contentBase64 string length ${contentBase64!.length} exceeds the ${maxB64Length} character limit (implies decoded size over ${MAX_UPLOAD_BASE64_BYTES} bytes).`,
+              'Upload a smaller file, or use localPath if this server exposes the host filesystem.',
+            );
+          }
           const buf = Buffer.from(contentBase64!, 'base64');
           if (buf.length > MAX_UPLOAD_BASE64_BYTES) {
             return invalidParams(
