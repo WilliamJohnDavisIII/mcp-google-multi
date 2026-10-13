@@ -50,8 +50,10 @@ export function gmailDiscoverFilter(output) {
 
 export function gmailDiscoverNoMatch(output) {
   const j = envelope(output);
-  if (!j || j.operations.length !== 0) return fail('expected empty operations');
-  return /without query/i.test(j.next) ? ok(j.next) : fail(j.next);
+  // No token matches: catalog() falls back to the full listing rather than empty.
+  if (!j || j.operations.length === 0) return fail('expected a fallback listing, not empty operations');
+  if (!j.operations.some((o) => o.tool === 'gmail_send')) return fail('fallback listing missing gmail_send');
+  return /exact name/i.test(j.next) ? ok(j.next) : fail(j.next);
 }
 
 export function discoverAllExpands(output) {

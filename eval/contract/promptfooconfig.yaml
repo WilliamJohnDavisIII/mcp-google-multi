@@ -52,7 +52,7 @@ tests:
     assert:
       - { type: javascript, value: 'file://asserts.mjs:gmailDiscoverFilter' }
 
-  - description: gmail_discover no-match query hints at retrying without it
+  - description: gmail_discover no-match query falls back to the full listing
     vars: { prompt: '{"tool": "gmail_discover", "args": {"query": "zzzznothing"}}' }
     assert:
       - { type: javascript, value: 'file://asserts.mjs:gmailDiscoverNoMatch' }
