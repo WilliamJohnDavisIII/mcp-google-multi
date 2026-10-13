@@ -277,3 +277,29 @@ describe('sheets_copy_sheet_to', () => {
     expect((req?.data as { destinationSpreadsheetId?: string })?.destinationSpreadsheetId).toBe('DST');
   });
 });
+
+describe('drive_upload contentBase64 length validation', () => {
+  it('rejects contentBase64 whose string length exceeds the encoding overhead cap, before decoding', async () => {
+    const h = toolHarness();
+    const MAX_UPLOAD_BASE64_BYTES = 10 * 1024 * 1024;
+    const maxB64Length = Math.ceil(MAX_UPLOAD_BASE64_BYTES / 3) * 4 + 4;
+    const oversized = 'a'.repeat(maxB64Length + 1);
+    const res = await h.call('drive_upload', { account: 'test', filename: 'big.bin', contentBase64: oversized });
+    const env = parse(res);
+    expect(res.isError).toBe(true);
+    expect(env.error).toBe('invalid_params');
+    expect(h.requests()).toHaveLength(0);
+  });
+});
+
+describe('drive_upload with both contentBase64 and localPath', () => {
+  it('rejects when both contentBase64 and localPath are passed, with owner context', async () => {
+    const ctx = buildIdentityContext({ GOOGLE_PROFILE: 'full-writes' } as NodeJS.ProcessEnv);
+    const { server, handlers } = fakeServer();
+    buildRegistry(server as never, ctx, 'eager');
+    const res = await handlers.drive_upload({ account: 'test', filename: 'f.txt', contentBase64: Buffer.from('hello').toString('base64'), localPath: '/etc/hostname' });
+    expect(res.isError).toBe(true);
+    expect(parse(res).error).toBe('invalid_params');
+  });
+});
+
