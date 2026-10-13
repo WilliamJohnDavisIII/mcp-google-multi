@@ -26,6 +26,15 @@ function getHeader(
   return headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
 }
 
+function pickHeaders(
+  headers: { name?: string | null; value?: string | null }[] | undefined,
+  names: string[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of names) out[name] = getHeader(headers, name);
+  return out;
+}
+
 function collectTextParts(part: any, plain: string[], html: string[], topLevel = false): void {
   if (!part) return;
   const isAttachment = Boolean(part.filename) || Boolean(part.body?.attachmentId);
@@ -209,6 +218,22 @@ export async function resolveReply(
   };
 }
 
+// Gmail's after:/before: operators take epoch seconds; Date.parse accepts both
+// an ISO date and a full date-time, so one parse covers both input shapes.
+function parseEpochSeconds(value: string): number | null {
+  // A date-only value is interpreted as 00:00 UTC.
+  // A date-time must include Z or an offset (+HH:MM or -HH:MM) to be unambiguous.
+  if (value.includes('T')) {
+    const hasZ = value.endsWith('Z');
+    const hasOffset = /[+-]\d{2}:\d{2}$/.test(value);
+    if (!hasZ && !hasOffset) {
+      return null;
+    }
+  }
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+}
+
 const BODY_CAP_CHARS = 50_000;
 // gmail_read_batch aggregate ceiling: bounds the summed serialized output so a
 // 100-message batch can't blow the context window (per-message bodies are capped at BODY_CAP_CHARS first).
@@ -379,6 +404,7 @@ export async function readBatch(
   ids: string[],
   full: boolean,
   rawHtml: boolean,
+  metaHeaders?: string[],
 ): Promise<any[]> {
   if (ids.length === 0) {
     throw new GmailComposeError('validation_error', '`ids` must be a non-empty array of 1..100 message IDs.');
@@ -387,6 +413,7 @@ export async function readBatch(
     throw new GmailComposeError('validation_error', `\`ids\` accepts at most 100 message IDs per call (got ${ids.length}).`);
   }
 
+  const metadataMode = metaHeaders !== undefined && metaHeaders.length > 0;
   const cap = full ? undefined : BODY_CAP_CHARS;
   const CHUNK_SIZE = 10;
   const entries: any[] = new Array(ids.length);
@@ -397,7 +424,9 @@ export async function readBatch(
     const slice = ids.slice(i, i + CHUNK_SIZE);
     const settled = await Promise.all(slice.map(async (id, j) => {
       try {
-        const res = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
+        const res = metadataMode
+          ? await gmail.users.messages.get({ userId: 'me', id, format: 'metadata', metadataHeaders: metaHeaders })
+          : await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
         return { idx: i + j, id, ok: true as const, data: res.data };
       } catch (err: any) {
         return { idx: i + j, id, ok: false as const, err };
@@ -405,7 +434,14 @@ export async function readBatch(
     }));
     for (const s of settled) {
       if (s.ok) {
-        entries[s.idx] = parseMessage(s.data, cap, { rawHtml });
+        entries[s.idx] = metadataMode
+          ? {
+              id: s.data.id ?? '',
+              threadId: s.data.threadId ?? '',
+              labelIds: s.data.labelIds ?? [],
+              headers: pickHeaders(s.data.payload?.headers, metaHeaders!),
+            }
+          : parseMessage(s.data, cap, { rawHtml });
         ok++;
       } else {
         const env = mapGoogleError(s.err, account);
@@ -423,10 +459,11 @@ export async function readBatch(
 
   // Aggregate guard: walk in order accumulating serialized size; once the running
   // total would exceed the budget, cap this and every later success body so the batch never blows the context window.
+  // Metadata-mode entries carry no body, so there is nothing to cap.
   let running = 0;
   let truncatedAny = false;
   let exhausted = false;
-  for (const e of entries) {
+  for (const e of metadataMode ? [] : entries) {
     if (!e || e.error) {
       running += JSON.stringify(e ?? {}).length;
       continue;
@@ -486,16 +523,23 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
     {
       description:
         'Search messages in a Gmail account. Returns compact rows (id, from, subject, date, snippet); ' +
-        'pass full=true for threadId, to, labelIds and the untruncated snippet.',
+        'pass full=true for threadId, to, labelIds and the untruncated snippet. ' +
+        'For a recurring "what is new" sweep, prefer gmail_list_history over polling this with since.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
         query: z.string().describe('Gmail search syntax, e.g. "from:alice is:unread"'),
         maxResults: coerceNumber(z.number().min(1).max(100)).optional()
           .describe('Max results to return (default: 20, max: 100)'),
         full: coerceBoolean.optional().describe('Return the full row shape instead of the compact default'),
+        since: z.string().optional()
+          .describe('Only messages on/after this ISO 8601 date (00:00 UTC) or date-time with Z or offset, added to the query as after:<epoch seconds>'),
+        until: z.string().optional()
+          .describe('Only messages before this ISO 8601 date (00:00 UTC) or date-time with Z or offset, added to the query as before:<epoch seconds>'),
+        includeSpamTrash: coerceBoolean.optional()
+          .describe('Include Spam and Trash in the search. Gmail excludes both by default, even for in:anywhere.'),
       },
     },
-    async ({ account, query, maxResults, full }) => {
+    async ({ account, query, maxResults, full, since, until, includeSpamTrash }) => {
       try {
         // Gmail treats a blank `q` as no filter, so a caller passing an unset
         // variable got the whole mailbox back as if it had matched.
@@ -506,13 +550,37 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
             'Pass a real Gmail search term such as "is:unread" or "from:someone@example.com". Returning the whole mailbox for a blank query would look like a successful search.',
           );
         }
+        let effectiveQuery = query;
+        if (since !== undefined) {
+          const epoch = parseEpochSeconds(since);
+          if (epoch === null) {
+            return invalidParams(
+              account as Account,
+              `\`since\` is not a parsable ISO 8601 date or date-time: "${since}".`,
+              'Pass an ISO 8601 date (e.g. "2026-01-01") or a date-time with Z or offset (e.g. "2026-01-01T09:00:00Z").',
+            );
+          }
+          effectiveQuery = `${effectiveQuery} after:${epoch}`;
+        }
+        if (until !== undefined) {
+          const epoch = parseEpochSeconds(until);
+          if (epoch === null) {
+            return invalidParams(
+              account as Account,
+              `\`until\` is not a parsable ISO 8601 date or date-time: "${until}".`,
+              'Pass an ISO 8601 date (e.g. "2026-01-01") or a date-time with Z or offset (e.g. "2026-01-01T09:00:00Z").',
+            );
+          }
+          effectiveQuery = `${effectiveQuery} before:${epoch}`;
+        }
         const auth = await getClientFn(account as Account);
         const gmail = gmailClient({ version: 'v1', auth });
 
         const listRes = await gmail.users.messages.list({
           userId: 'me',
-          q: query,
+          q: effectiveQuery,
           maxResults: maxResults ?? 20,
+          ...(includeSpamTrash !== undefined ? { includeSpamTrash } : {}),
         });
 
         const messages = listRes.data.messages ?? [];
@@ -560,19 +628,40 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
     'gmail_read',
     {
       _meta: { 'anthropic/maxResultSizeChars': 50_000 },
-      description: 'Read a full Gmail message by ID (body capped at 50k chars unless full=true)',
+      description: 'Read a full Gmail message by ID (body capped at 50k chars unless full=true). ' +
+        'Pass `headers` for metadata mode: no body decoding, just id, threadId, labelIds and the named headers.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
         messageId: z.string().min(1).describe('Gmail message ID'),
         full: coerceBoolean.optional().describe('Return the entire body without the character cap'),
         rawHtml: coerceBoolean.optional()
           .describe('Return the HTML body unconverted instead of the plain-text rendering (HTML-only messages)'),
+        headers: coerceArray(z.string()).optional()
+          .describe('Header names to fetch in metadata mode instead of the full body (e.g. ["Subject", "From"])'),
       },
     },
-    async ({ account, messageId, full, rawHtml }) => {
+    async ({ account, messageId, full, rawHtml, headers }) => {
       try {
         const auth = await getClientFn(account as Account);
         const gmail = gmailClient({ version: 'v1', auth });
+
+        if (headers !== undefined && (headers as string[]).length > 0) {
+          const metaRes = await gmail.users.messages.get({
+            userId: 'me',
+            id: messageId,
+            format: 'metadata',
+            metadataHeaders: headers as string[],
+          });
+          const metaResult = {
+            id: metaRes.data.id ?? '',
+            threadId: metaRes.data.threadId ?? '',
+            labelIds: metaRes.data.labelIds ?? [],
+            headers: pickHeaders(metaRes.data.payload?.headers, headers as string[]),
+          };
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(metaResult, null, 2) }],
+          };
+        }
 
         const res = await gmail.users.messages.get({
           userId: 'me',
@@ -652,20 +741,29 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
     {
       _meta: { 'anthropic/maxResultSizeChars': BATCH_MAX_RESULT_CHARS },
       annotations: { readOnlyHint: true, openWorldHint: true },
-      description: 'Read many Gmail messages by ID in one call, collapsing the search→read triage loop. Bodies are capped at 50k chars each (unless full=true) and the aggregate output is bounded. Returns one ordered entry per id plus a trailing counts summary; a single failed id does NOT fail the batch.',
+      description: 'Read many Gmail messages by ID in one call, collapsing the search→read triage loop. Bodies are capped at 50k chars each (unless full=true) and the aggregate output is bounded. Returns one ordered entry per id plus a trailing counts summary; a single failed id does NOT fail the batch. Pass `headers` for metadata mode: no body decoding, just id, threadId, labelIds and the named headers per entry.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
         ids: coerceArray(z.string()).describe('Gmail message IDs to read (1..100). Comma-separated string or JSON array.'),
         full: coerceBoolean.optional().describe('Return entire bodies without the per-message 50k character cap'),
         rawHtml: coerceBoolean.optional()
           .describe('Return HTML bodies unconverted instead of the plain-text rendering (HTML-only messages)'),
+        headers: coerceArray(z.string()).optional()
+          .describe('Header names to fetch in metadata mode instead of full bodies (e.g. ["Subject", "From"])'),
       },
     },
-    async ({ account, ids, full, rawHtml }) => {
+    async ({ account, ids, full, rawHtml, headers }) => {
       try {
         const auth = await getClientFn(account as Account);
         const gmail = gmailClient({ version: 'v1', auth });
-        const result = await readBatch(gmail, account as Account, (ids as string[]) ?? [], full === true, rawHtml === true);
+        const result = await readBatch(
+          gmail,
+          account as Account,
+          (ids as string[]) ?? [],
+          full === true,
+          rawHtml === true,
+          headers as string[] | undefined,
+        );
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
         };
@@ -1131,6 +1229,30 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
         });
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(res.data, null, 2) }],
+        };
+      } catch (error: any) {
+        const mapped = composeErrorResult(error, account as Account);
+        return mapped ?? handleGmailError(error, account as Account);
+      }
+    },
+  );
+
+  server.registerTool(
+    'gmail_delete_draft',
+    {
+      description: 'Permanently delete a Gmail draft by its draft ID',
+      inputSchema: {
+        account: accountEnum.describe('Google account alias'),
+        draftId: z.string().min(1).describe('Draft ID to delete'),
+      },
+    },
+    async ({ account, draftId }) => {
+      try {
+        const auth = await getClientFn(account as Account);
+        const gmail = gmailClient({ version: 'v1', auth });
+        await gmail.users.drafts.delete({ userId: 'me', id: draftId });
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({ deleted: true, draftId }, null, 2) }],
         };
       } catch (error: any) {
         const mapped = composeErrorResult(error, account as Account);
