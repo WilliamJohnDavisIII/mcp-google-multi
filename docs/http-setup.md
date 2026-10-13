@@ -26,6 +26,8 @@ Everything you paste is generic: replace `mcp.example.com` with your host and `<
 2. Optionally, a `MASTER_KEY` (base64 32-byte) that encrypts stored tokens at rest. Unset, the server generates one into a `0600` `master.key` file in its config directory on first start, so that directory must persist. To set it yourself, generate once with `openssl rand -base64 32` and keep it stable — a changed key bricks existing tokens. On a PaaS the platform can mint and persist it for you (see below).
 3. Your accounts, as usual: `GOOGLE_ACCOUNTS=work:you@company.com,personal:you@gmail.com` (or a `config.json`; see [configuration](./configuration.md)).
 
+A headless box (Docker, Render, Railway) has no browser, and both the owner sign-in and each account's Google consent need one. Mint tokens on a workstation first (`mcp-google-multi auth --account <alias>` for each account), then bundle them with `mcp-google-multi account export --out bundle.enc` and ship that bundle to the target as a secret, same as `MASTER_KEY` or the client secret. Run `mcp-google-multi account import bundle.enc` there before the server ever serves HTTP. See [account export / import](./features.md) for what the bundle does and doesn't carry.
+
 Full key reference: [docs/configuration.md](./configuration.md). Keeping secrets out of plaintext files: [docs/secrets.md](./secrets.md).
 
 ---
