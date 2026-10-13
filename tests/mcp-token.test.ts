@@ -28,6 +28,7 @@ import {
 import { withFileLock } from '../src/fs-atomic.js';
 import { decryptToken, encryptToken } from '../src/token-store.js';
 import { RefreshStore as PrevRefreshStore } from './fixtures/refresh-store-prev.js';
+import { RefreshStore as PrevReleaseRefreshStore } from './fixtures/refresh-store-prev-release.js';
 import { legacyTok, onDisk, r1Bytes, seedFamilies, seedLegacy, specKey, specMac, specSuccessor, specTag, specToken } from './_refresh-spec.js';
 
 /** Change one character in the middle of a JWT's signature; changing the last one can leave it
@@ -632,6 +633,56 @@ describe('RefreshStore concurrent-duplicate replay', () => {
     s.rotate(t0, 1005);
     expect(s.rotate(t0, 1010)).toBeNull();
     expect(onDisk(file, KEY).families).toEqual({});
+  });
+
+  it('a family keeps no by field when it was issued with no fingerprint', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner');
+    const fid = fidOf(t0).toString('base64url');
+    expect(Object.hasOwn(onDisk(file, KEY).families[fid], 'by')).toBe(false);
+
+    const t1 = s.issue(1000, 'owner', 'fp-a');
+    const fid1 = fidOf(t1).toString('base64url');
+    expect(onDisk(file, KEY).families[fid1].by).toBe('fp-a');
+  });
+
+  it('a family with a recorded by is still reuse when the call presents no fingerprint', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    s.rotate(t0, 1005, undefined, 'fp-a'); // f.by = 'fp-a'
+    expect(s.rotate(t0, 1010)).toBeNull(); // presented with no fingerprint at all
+    expect(onDisk(file, KEY).families).toEqual({});
+  });
+
+  it('a rotation with no fingerprint clears the family\'s by, so a later replay with the old one is reuse', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    const t1 = s.rotate(t0, 1005, undefined, 'fp-a')!.token; // f.by = 'fp-a'
+    const fid = fidOf(t0).toString('base64url');
+    expect(onDisk(file, KEY).families[fid].by).toBe('fp-a');
+    s.rotate(t1, 1010); // no fingerprint: must clear by, not leave it at 'fp-a'
+    expect(Object.hasOwn(onDisk(file, KEY).families[fid], 'by')).toBe(false);
+    // t1 is now one generation behind; presenting it with the old fingerprint,
+    // inside the window, must still be reuse because by is no longer set.
+    expect(s.rotate(t1, 1011, undefined, 'fp-a')).toBeNull();
+    expect(onDisk(file, KEY).families).toEqual({});
+  });
+
+  it('v6.0.0-beta.4 (the latest release, before by existed) still rotates a family that has one', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    const t1 = s.rotate(t0, 1005, undefined, 'fp-a')!.token;
+    const fid = fidOf(t0).toString('base64url');
+    expect(onDisk(file, KEY).families[fid].by).toBe('fp-a');
+
+    const prev = new PrevReleaseRefreshStore(file, KEY);
+    const rotated = prev.rotate(t1, 2000);
+    expect(rotated).not.toBeNull();
+    expect(rotated!.sub).toBe('owner');
+    // The older release has no notion of by: it drops the extra field on
+    // the next write rather than rejecting the record that carries it.
+    expect(Object.hasOwn(onDisk(file, KEY).families[fid], 'by')).toBe(false);
+    expect(s.rotate(rotated!.token, 2001)!.sub).toBe('owner');
   });
 
   it('a false accept on a duplicate drops every session of that subject, exactly like a normal rotation', () => {

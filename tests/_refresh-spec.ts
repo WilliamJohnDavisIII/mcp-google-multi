@@ -61,7 +61,7 @@ export const legacyTok = (label: string): string => createHash('sha256').update(
 
 export interface StoreFile {
   format?: number;
-  families: Record<string, { sub: string; gen: number; cur: string; createdAt: number; usedAt: number; legacy?: string }>;
+  families: Record<string, { sub: string; gen: number; cur: string; createdAt: number; usedAt: number; legacy?: string; by?: string }>;
   active: Record<string, { sub: string; issuedAt: number; family: string }>;
   spent: Record<string, string>;
 }
