@@ -89,18 +89,27 @@ describe('buildRegistry resolves every handler through its context', () => {
     expect(B.tokenStore.readToken).not.toHaveBeenCalled();
   });
 
-  it('account_list lists only the context accounts, token health and admin flags', async () => {
+  it('account_list is terse by default: alias, email, admin, token status, default flag', async () => {
     const out = parse(await A.handlers.account_list({}));
     expect(out.defaultAccount).toBe('test');
     expect(out.accounts.map((a: { email: string }) => a.email)).toEqual(['a-test@ctx-a.example', 'a-second@ctx-a.example']);
     const test = out.accounts.find((a: { alias: string }) => a.alias === 'test');
     expect(test.admin).toBe(true);
-    for (const a of out.accounts) expect(a.token.status).toBe('ok');
+    expect(test.default).toBe(true);
+    for (const a of out.accounts) expect(a.tokenStatus).toBe('ok');
     expect(A.tokenStore.hasToken).toHaveBeenCalled();
     expect(B.tokenStore.hasToken).not.toHaveBeenCalled();
     const text = JSON.stringify(out);
     expect(text).not.toContain('test@example.com');
     expect(text).not.toContain('ctx-b');
+    expect(text).not.toContain('scopes');
+  });
+
+  it("account_list verbose:true keeps today's full per-account scope report", async () => {
+    const out = parse(await A.handlers.account_list({ verbose: true }));
+    const test = out.accounts.find((a: { alias: string }) => a.alias === 'test');
+    expect(test.token.status).toBe('ok');
+    expect(test.scopes).toBeDefined();
   });
 
   const decodeRaw = (req: Req | undefined): string => {
