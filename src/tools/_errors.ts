@@ -458,7 +458,8 @@ export function mapGoogleError(
           (`Network failure (${netCode}) before reaching Google - not an auth or API problem. Usually transient: retry. ` +
             'If it persists on a high-latency or broken-IPv6 link, raise the happy-eyeballs budget: NODE_OPTIONS=--network-family-autoselection-attempt-timeout=4000 (server default 2000ms), and check connectivity with curl.'),
         // Not an override site (C5 is the only kind whose retriable the host
-        // may flip): EE keeps core's retriable codes for network_error.
+        // may flip): a multi-tenant host keeps core's retriable codes for
+        // network_error.
         retriable: RETRIABLE_NET_CODES.has(netCode),
         account,
       };

@@ -1,7 +1,7 @@
 // Optional host-supplied remediation hints (H3). A single-owner process never
-// installs one, so every call site keeps today's literal; a host that serves
-// more than one identity (EE) installs one provider for its whole process,
-// like the HTTP reauth linker (reauth-hint.ts). Facts only, never pre-rendered
+// installs one, so every call site keeps today's literal; a multi-tenant host
+// installs one provider for its whole process, like the HTTP reauth linker
+// (reauth-hint.ts). Facts only, never pre-rendered
 // text, so a host can word a case however its audience needs — except
 // `scope_unknown`, which also carries the service's own text so a provider
 // can choose to keep it verbatim.

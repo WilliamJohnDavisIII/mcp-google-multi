@@ -371,9 +371,10 @@ host-chosen 403 body instead of the generic `tenant_not_found`;
 `{ denied: { description } }` to add an `error_description` to the
 `access_denied` sign-in redirect. Neither seam introduces a new slug into
 core itself. **Adding a member to `HintCase` is a breaking change for any
-provider written as an exhaustive switch (EE's is): such a provider fails to
-typecheck against a newer core until it handles the new case, so it ships
-behind a minor pin bump, never a silent repin.**
+provider written as an exhaustive switch (a multi-tenant host's typically
+is): such a provider fails to typecheck against a newer core until it
+handles the new case, so it ships behind a minor pin bump, never a silent
+repin.**
 
 `buildRegistry(server, ctx)` resolves every registered tool through `ctx`:
 the client, token reads, account emails (the From header, `drive_transfer`'s
