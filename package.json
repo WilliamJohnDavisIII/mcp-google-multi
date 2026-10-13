@@ -85,6 +85,7 @@
     "gen:discovery": "tsx scripts/fetch-discovery.ts",
     "gen:tools": "tsx scripts/gen-tools.ts",
     "gen:coverage": "tsx scripts/gen-coverage.ts",
+    "gen:skill": "tsx scripts/gen-skill.ts",
     "eval:contract": "npx --yes promptfoo@0.123.1 eval -c eval/contract/promptfooconfig.yaml --no-progress-bar",
     "measure:lazy": "node scripts/measure-tools.mjs",
     "pack:mcpb": "mcpb pack . mcp-google-multi.mcpb",
