@@ -26,4 +26,18 @@ describe('setHintProvider / hints', () => {
     setHintProvider(null);
     expect(hints()).toBeNull();
   });
+
+  it('a throwing provider never propagates: render falls back to the no-provider shape (red by mutation: drop the catch)', () => {
+    const thrown: HintProvider = {
+      render: () => {
+        throw new Error('provider blew up');
+      },
+    };
+    setHintProvider(thrown);
+    const rendered = hints()?.render({ kind: 'no_accounts' });
+    expect(rendered?.hint).toBeUndefined();
+    // the call site's `rendered?.hint ?? <default>` sees the same undefined
+    // it would see with no provider installed at all
+    expect(rendered?.hint ?? 'default').toBe('default');
+  });
 });

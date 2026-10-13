@@ -117,4 +117,24 @@ describe('registerDiscoverTools', () => {
       setHintProvider(null);
     }
   });
+
+  it('a throwing hint provider falls back to describePolicy, the discover call never rejects (red by mutation: drop the catch in hints())', async () => {
+    const { registered: baseline } = setup();
+    const gmailBaseline = baseline.find((r) => r.name === 'gmail_discover')!;
+    const defaultPayload = JSON.parse((await gmailBaseline.handler({ query: undefined })).content[0].text);
+
+    setHintProvider({
+      render: () => {
+        throw new Error('provider blew up');
+      },
+    });
+    try {
+      const { registered } = setup();
+      const gmail = registered.find((r) => r.name === 'gmail_discover')!;
+      const payload = JSON.parse((await gmail.handler({ query: undefined })).content[0].text);
+      expect(payload.writeControl).toBe(defaultPayload.writeControl);
+    } finally {
+      setHintProvider(null);
+    }
+  });
 });

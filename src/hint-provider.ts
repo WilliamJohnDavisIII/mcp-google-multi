@@ -116,7 +116,20 @@ export function setHintProvider(p: HintProvider | null): void {
   installed = p;
 }
 
-/** null means every call site keeps today's literal. */
+// A throwing provider must never take down the call site: every call site
+// does `hints()?.render(...)?.hint ?? <default>`, so a render that cannot
+// produce a Rendered falls back to the same literal a missing provider
+// would, and the provider's own error text never reaches a client.
 export function hints(): HintProvider | null {
-  return installed;
+  if (!installed) return null;
+  const provider = installed;
+  return {
+    render(c: HintCase): Rendered {
+      try {
+        return provider.render(c);
+      } catch {
+        return undefined as unknown as Rendered;
+      }
+    },
+  };
 }

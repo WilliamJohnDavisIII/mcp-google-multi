@@ -128,4 +128,31 @@ describe('runFanout per-account throw (H3)', () => {
     expect(payload.results[0].error).toEqual({ error: 'internal', message: 'server error', hint: 'tell the operator', retriable: false, account: 'a1' });
     expect(seen).toEqual([{ kind: 'internal', account: 'a1' }]);
   });
+
+  it('a throwing provider never rejects runFanout, and the other accounts\' results stay intact (red by mutation: drop the catch in hints())', async () => {
+    setHintProvider({
+      render: () => {
+        throw new Error('provider blew up');
+      },
+    });
+    const res = await runFanout(
+      async (args: unknown) => {
+        const { account } = args as { account: string };
+        if (account === 'a1') throw new Error('boom');
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ account, ok: true }) }] };
+      },
+      [{}],
+      ['a1', 'a2'],
+    );
+    const payload = JSON.parse(res.content[0].text) as {
+      results: ({ account: string; ok: true; data: unknown } | { account: string; ok: false; error: { message: string } })[];
+      partial: boolean;
+    };
+    const a1 = payload.results.find((r) => r.account === 'a1')!;
+    const a2 = payload.results.find((r) => r.account === 'a2')!;
+    expect(a1.ok).toBe(false);
+    expect((a1 as { error: { message: string } }).error.message).toBe('boom');
+    expect(a2).toEqual({ account: 'a2', ok: true, data: { account: 'a2', ok: true } });
+    expect(payload.partial).toBe(true);
+  });
 });

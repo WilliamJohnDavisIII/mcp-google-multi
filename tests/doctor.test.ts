@@ -110,6 +110,17 @@ describe('tenant-scope §1/§2/§6 residue (H3 PR1 commit 2)', () => {
     expect(seen).toEqual([{ kind: 'operator_only', slug: 'E_NODE_TOO_OLD' }]);
   });
 
+  it('§1: a throwing provider falls back to the no-provider hint (red by mutation: drop the catch in hints())', async () => {
+    setHintProvider({
+      render: () => {
+        throw new Error('provider blew up');
+      },
+    });
+    const r = await runDiagnostics(deps({ nodeVersion: '20.11.0' }), { scope: 'tenant' });
+    const s = r.sections.find((x) => x.id === 1)!;
+    expect(s.hint).toBe('Tell the server operator the code E_NODE_TOO_OLD.');
+  });
+
   it('§1: a provider is never consulted in operator scope (no HintCase rendered)', async () => {
     const seen = echo();
     await runDiagnostics(deps({ nodeVersion: '20.11.0' }));
