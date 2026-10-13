@@ -104,7 +104,7 @@ describe('withDefaultAccount injection matrix (single dispatch site)', () => {
     expect((res as { isError: boolean }).isError).toBe(true);
   });
 
-  it('a hint provider renders no_default_account with the registry aliases (H3)', async () => {
+  it('a hint provider renders no_default_account with the registry aliases', async () => {
     const seen: unknown[] = [];
     setHintProvider({
       render: (c) => {
@@ -122,9 +122,8 @@ describe('withDefaultAccount injection matrix (single dispatch site)', () => {
     }
   });
 
-  // The wizard tools take the account as the SUBJECT of the operation, so an
-  // injected default would adopt itself as the new alias (account_add) or
-  // re-authenticate the wrong account (account_reauth).
+  // The wizard tools take `account` as the SUBJECT of the operation: an injected default would
+  // adopt itself as the new alias (account_add) or re-authenticate the wrong account (account_reauth).
   it.each(['account_add', 'account_reauth'])('%s is excluded from injection', async (name) => {
     process.env.GOOGLE_DEFAULT_ACCOUNT = 'test';
     invalidateAccountSet();

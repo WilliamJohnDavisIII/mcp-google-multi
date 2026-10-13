@@ -19,7 +19,7 @@ function deps(overrides: Partial<AccountHealthDeps>): AccountHealthDeps {
 }
 
 describe('deriveAccountHealth', () => {
-  it('missing-token hint becomes an AS re-auth link over HTTP (S1.18)', () => {
+  it('missing-token hint becomes an AS re-auth link over HTTP', () => {
     setHttpReauthLink((a) => `https://mcp.example.com/authorize?flow=alias_reauth&alias=${encodeURIComponent(a)}&exp=1&sig=s`);
     try {
       const h = deriveAccountHealth(ALIAS, deps({ hasToken: () => false }));
@@ -35,7 +35,7 @@ describe('deriveAccountHealth', () => {
     expect(h.token.status).toBe('missing');
     expect(h.token.hint).toContain('auth --account test');
     expect(h.scopes).toMatchObject({ configured: CONFIGURED.length, granted: 0 });
-    // B3 extension: missing kept for v5 consumers, now sorted; three-state
+    // missing kept for v5 consumers, now sorted; three-state
     // breakdown present.
     expect(h.scopes.missing).toEqual([...CONFIGURED].sort());
     expect(h.scopes.requestable).toEqual([...CONFIGURED].sort());
@@ -102,7 +102,7 @@ describe('deriveAccountHealth', () => {
   });
 });
 
-describe('deriveAccountHealth hint provider routing (H3)', () => {
+describe('deriveAccountHealth hint provider routing', () => {
   afterEach(() => setHintProvider(null));
 
   function echo() {

@@ -11,9 +11,8 @@ import { listResult, sliceClean } from '../trim.js';
 
 
 export function registerCalendarTools(server: ToolRegistry, deps: CuratedToolDeps = {}): void {
-  // Per-registry, LIVE account enum + injectable client (S1.10): the
-  // schema follows the registry's account view at parse time, and the
-  // custody path is the context's, not the process global.
+  // Per-registry, live account enum + injectable client: the schema follows
+  // the registry's account view at parse time, not a process-global default.
   const accountEnum = accountArgLive(() => server.accountAliases()).optional();
   const getClientFn = deps.getClientFn ?? getClient;
   server.registerTool(
@@ -433,10 +432,8 @@ export function registerCalendarTools(server: ToolRegistry, deps: CuratedToolDep
           },
         });
         return {
-          // freebusy answers 200 with NO `calendars` key on an empty items
-          // list, and JSON.stringify(undefined) returns undefined, not a
-          // string: the SDK then rejected our own result with -32602. The
-          // value is a map keyed by calendar id, so the fallback is {}.
+          // Empty items returns 200 with no `calendars` key; JSON.stringify(undefined)
+          // would make the SDK reject our own result, so fall back to {}.
           content: [{ type: 'text' as const, text: JSON.stringify(res.data.calendars ?? {}, null, 2) }],
         };
       } catch (error: any) {

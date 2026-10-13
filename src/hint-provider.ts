@@ -1,10 +1,5 @@
-// Optional host-supplied remediation hints (H3). A single-owner process never
-// installs one, so every call site keeps today's literal; a multi-tenant host
-// installs one provider for its whole process, like the HTTP reauth linker
-// (reauth-hint.ts). Facts only, never pre-rendered
-// text, so a host can word a case however its audience needs — except
-// `scope_unknown`, which also carries the service's own text so a provider
-// can choose to keep it verbatim.
+// Optional host-supplied remediation hints: facts only, never pre-rendered
+// text, so a host can word a case however its audience needs. See docs/internals.md.
 import type { DenyReason, Policy } from './write-control.js';
 
 export type HintCase =
@@ -47,12 +42,8 @@ export type HintCase =
     }
   | { kind: 'operator_only'; slug: string };
 
-// A plain array literal, not derived from the union: deriving it would need a
-// value-level mirror of the type anyway, and this way a missing member is
-// caught by the completeness check below instead of silently compiling.
-// `as const` so that check narrows to the literal tuple rather than widening
-// every element back to the whole HintCase['kind'] union (which would make
-// it pass trivially, whatever was listed).
+// A plain array literal, not derived from the union, so a missing member is
+// caught by the completeness check below rather than silently compiling.
 export const HINT_KINDS = [
   'reauth',
   'legacy_plaintext_token',
@@ -85,10 +76,8 @@ export const HINT_KINDS = [
   'operator_only',
 ] as const satisfies readonly HintCase['kind'][];
 
-// Compile-time completeness check (runs under `tsc --noEmit`, which covers
-// src/ but not tests/): fails the build if a HintCase member is missing from
-// HINT_KINDS. `satisfies` above only checks every listed kind is valid, not
-// that every valid kind is listed — this closes that gap.
+// Compile-time completeness check: `satisfies` above only checks every listed
+// kind is valid, not that every valid kind is listed; this closes that gap.
 type _MissingFromHintKinds = Exclude<HintCase['kind'], (typeof HINT_KINDS)[number]>;
 type _AssertHintKindsComplete = _MissingFromHintKinds extends never ? true : ['HINT_KINDS is missing', _MissingFromHintKinds];
 const _hintKindsComplete: _AssertHintKindsComplete = true;
@@ -116,10 +105,8 @@ export function setHintProvider(p: HintProvider | null): void {
   installed = p;
 }
 
-// A throwing provider must never take down the call site: every call site
-// does `hints()?.render(...)?.hint ?? <default>`, so a render that cannot
-// produce a Rendered falls back to the same literal a missing provider
-// would, and the provider's own error text never reaches a client.
+// A throwing provider must never take down the call site: it falls back to
+// the same literal a missing provider would, never leaking its own error text.
 export function hints(): HintProvider | null {
   if (!installed) return null;
   const provider = installed;

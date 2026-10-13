@@ -13,7 +13,7 @@ export interface AccountHealthDeps {
   fileExists: (p: string) => boolean;
   now: () => number;
   /** Scopes required by registered tools — feeds doctor's tool-grained
-   * "registered but not requestable" view (B9). account_list stays compact:
+   * "registered but not requestable" view. account_list stays compact:
    * its report universe is profile ∪ granted only. */
   registeredScopes?: () => string[];
   /** Account view health is derived against; absent = the global registry. */
@@ -54,7 +54,7 @@ export function deriveAccountHealth(alias: string, deps: AccountHealthDeps = DEF
   const config = set.configs[alias];
   const admin = getAdminAccounts(set).includes(alias);
   const configured = resolveScopesForAccount(alias, set);
-  // BR-10: env-sourced accounts are not persisted in config.json, so the
+  // Env-sourced accounts are not persisted in config.json, so the
   // account wizard cannot edit them — the deployer edits env instead.
   const base = {
     alias,

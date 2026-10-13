@@ -1,10 +1,5 @@
-// B13: the minimal OAuth 2.1 Authorization Server + Resource Server
-// (oauth-authorization-server.md). Federate-and-hold: the server mints its own
-// audience-bound HS256 token for the MCP client (leg A), gates on an owner
-// Google login (leg B, tokens discarded), and separately holds per-alias Google
-// tokens (leg C, unchanged). Mounts into B12's HttpTransportHost as `routes` +
-// an `authenticate` for POST /mcp. All Google/CIMD I/O is injectable so the
-// whole surface is exercised by an offline harness.
+// The minimal OAuth 2.1 Authorization Server + Resource Server: federate-and-hold
+// (own token / discarded owner login / held per-alias tokens). See docs/internals.md.
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isIPv4 } from 'node:net';
@@ -24,10 +19,8 @@ import { logSafe } from './trim.js';
 
 const CLAUDE_AI_FIXED_CALLBACK = 'https://claude.ai/api/mcp/auth_callback';
 
-// DCR (/register) is public + unauthenticated, so its in-memory store must be
-// bounded like every sibling store (the ReplayGuard cap) or a request loop
-// OOMs the process. Cap client count (FIFO-evict the oldest) and
-// the per-request redirect_uris shape so one entry can't be arbitrarily large.
+// /register is public and unauthenticated, so its store must stay bounded
+// (FIFO-evict the oldest) like every sibling store, or a request loop OOMs.
 export const DCR_MAX_CLIENTS = 1000;
 export const DCR_MAX_REDIRECT_URIS = 10;
 const DCR_MAX_URI_LEN = 2048;
@@ -94,13 +87,11 @@ export interface GoogleIdentity {
 const OIDC_SUB = /^[\x21-\x7e]{1,255}$/;
 const HOSTED_DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
 
-// RFC 6749's error_description charset: %x20-21 / %x23-5B / %x5D-7E (printable
-// ASCII minus the backslash and double-quote that would need escaping in the
-// query string). A resolveSubject denial outside this set is dropped rather
-// than forwarded unvalidated (H3 PR1).
+// RFC 6749 error_description charset (%x20-21/%x23-5B/%x5D-7E); a denial
+// description outside it is dropped rather than forwarded unvalidated.
 const ERROR_DESCRIPTION_RE = /^[\x20-\x21\x23-\x5b\x5d-\x7e]{1,200}$/;
 
-/** Only trust the id_token identity when Google marks the email verified (#8).
+/** Only trust the id_token identity when Google marks the email verified.
  * The token comes straight from Google's token endpoint, so its claims are
  * read unsigned. A malformed sub or hd is dropped, never passed on. */
 export function verifiedIdentityFromIdToken(idToken?: string | null): GoogleIdentity | undefined {
@@ -231,7 +222,7 @@ function isLoopbackHostname(h: string): boolean {
   return isIPv4(host) && host.split('.')[0] === '127';
 }
 
-/** C6: exact redirect_uri match, with RFC 8252 §7.3 port-agnostic loopback and
+/** Exact redirect_uri match, with RFC 8252 §7.3 port-agnostic loopback and
  *  the fixed claude.ai callback. */
 export function redirectAllowed(redirectUri: string, docRedirectUris: string[]): boolean {
   if (redirectUri === CLAUDE_AI_FIXED_CALLBACK) return true;
@@ -255,10 +246,7 @@ export function redirectAllowed(redirectUri: string, docRedirectUris: string[]):
   });
 }
 
-// The owner_gate browser binding (docs/internals.md). One cookie per flow, so
-// two sign-ins started in one browser do not overwrite each other. __Host-
-// requires Secure, which an http base (the loopback owner) cannot rely on in
-// every browser, so an http base gets a plain host-only name instead.
+// Owner-gate browser binding: one cookie per flow; see docs/internals.md.
 const BIND_HASH = /^[A-Za-z0-9_-]{43}$/;
 
 function bindCookieName(base: string, bind: string): string {
@@ -334,10 +322,7 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
   const base = config.base;
   const resource = config.resourceUri;
   const secret = config.secret;
-  // States, approvals and codes live minutes, and their single use rests on an
-  // in-memory replay guard that a restart empties. So they are signed with a
-  // key only this AuthServer holds: a restart invalidates every one in flight,
-  // instead of letting a spent or unreserved one pass the new, empty guard.
+  // States/approvals/codes are signed with a per-process secret; see docs/internals.md.
   const flowSecret = new Uint8Array(randomBytes(32));
   const accessTtl = config.accessTtlSec ?? ACCESS_TTL_DEFAULT;
   const cimd = deps.fetchCimd ?? ((clientId: string) => fetchCimdDocument(clientId));
@@ -399,7 +384,7 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
   async function validateClient(clientId: string): Promise<{ redirect_uris: string[]; dcr: boolean } | { error: string; message: string } | { busy: true }> {
     const reg = registered.get(clientId);
     if (reg) return { redirect_uris: reg.redirect_uris, dcr: true };
-    // C7/#5: validate the issuer host + scheme BEFORE any outbound fetch, so we
+    // Validate the issuer host + scheme BEFORE any outbound fetch, so we
     // only ever fetch an allowlisted issuer (no arbitrary-URL SSRF surface).
     let issuerHost: string;
     let scheme: string;
@@ -415,16 +400,16 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
       log(`CIMD rejected: issuer=${logSafe(`${scheme}//${issuerHost}`, 80)} not allowlisted client_id_len=${clientId.length}`);
       return { error: 'E_CIMD_INVALID', message: 'invalid client' };
     }
-    // #15: cached only once it validates; the cache logs a failed fetch.
+    // Cached only once it validates; the cache logs a failed fetch.
     const got = await cimdClients.resolve(
       clientId,
       (doc) => doc.client_id === clientId && Array.isArray(doc.redirect_uris) && doc.redirect_uris.length > 0,
     );
     if ('busy' in got) return got;
-    // #13: never echo internal fetch details to the caller (blind-SSRF oracle).
+    // Never echo internal fetch details to the caller (blind-SSRF oracle).
     if ('error' in got) return { error: got.error, message: 'invalid client' };
     const uris = got.doc.redirect_uris as string[];
-    // C6 #14: warn on a localhost-only redirect set (loopback impersonation),
+    // Warn on a localhost-only redirect set (loopback impersonation),
     // once per fetch rather than on every sign-in the cache serves.
     if (got.fresh && uris.every((u) => { try { return isLoopbackHostname(new URL(u).hostname); } catch { return false; } })) {
       log(`client ${logSafe(clientId, 128)} advertises only loopback redirect_uris`);
@@ -439,7 +424,7 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
   /** `incoming`: the artifact spent to get here. If no slot is left for the
    * new state it is unspent, so retrying it works once a slot frees. */
   async function toGoogle(res: ServerResponse, sp: StatePayload, incoming?: string): Promise<true> {
-    // H4 F1: without this, a Google URL minted here and forwarded to someone
+    // Without this, a Google URL minted here and forwarded to someone
     // else signs THEM in and hands their subject to the starting client.
     const headers: Record<string, string> = {};
     if (sp.flow === 'owner_gate') {
@@ -463,8 +448,6 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
     return redirect(res, authUrl, headers);
   }
 
-  // GET /authorize (validate + interstitial for DCR clients); POST /authorize
-  // (a DCR consent approval — verify the signed pending token, then proceed).
   const authorize: RouteHandler = async (req, res, url) => {
     if (req.method === 'POST') {
       let form: Record<string, string>;
@@ -479,7 +462,6 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
       } catch {
         return errorPage(res, 400, 'E_STATE_INVALID', 'the approval is invalid or expired');
       }
-      // Only the client leg signs pendings, and it is always the owner sign-in.
       // Defence in depth: a pending from an earlier release, which could carry
       // flow=alias_reauth, was signed with MCP_JWT_KEY and no longer verifies.
       if (pending.flow !== 'owner_gate') {
@@ -501,10 +483,8 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
     const clientState = q.get('state') ?? undefined;
     const aliasParam = q.get('alias') ?? undefined;
 
-    // Server-minted alias_add link: the whole request identity (tenant, alias,
-    // bundles) lives inside the SIGNED state — verify, spend it (single-use),
-    // then re-sign fresh for the Google leg. A tampered tenantId breaks the
-    // signature; a caller cannot supply one at all.
+    // alias_add: tenant/alias/bundles live inside the SIGNED state, verified
+    // and spent single-use before re-signing for Google; a caller can't tamper with them.
     if (q.get('flow') === 'alias_add' && !clientId) {
       let minted: StatePayload & { jti: string; exp: number };
       try {
@@ -523,11 +503,7 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
       return toGoogle(res, sp as StatePayload, minted.jti);
     }
 
-    // In-call re-auth (BV-1): a user-clicked `flow=alias_reauth` link has NO
-    // client leg — no code is delivered to any client, the refreshed token is
-    // written server-side for the alias — so it skips the client_id/redirect/
-    // PKCE requirements. The link must be one this server signed (reauthLink),
-    // and /callback still binds the completing identity to the alias's email.
+    // alias_reauth skips client_id/redirect/PKCE (no client leg); see docs/internals.md.
     if (q.get('flow') === 'alias_reauth' && !clientId) {
       if (config.legacyAliasReauth === false) {
         // Alias-only, tenant-ambiguous: disabled on multi-tenant deployments.
@@ -547,22 +523,18 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
     if ('busy' in client) return clientUnavailable(res);
     if ('error' in client) return json(res, 400, { error: 'invalid_client', message: client.message, iss: base }, issHeader);
 
-    // (2) exact redirect_uri match BEFORE minting anything (open-redirect defense)
+    // Exact redirect_uri match BEFORE minting anything (open-redirect defense).
     if (!redirectUri || !redirectAllowed(redirectUri, client.redirect_uris)) {
       return errorPage(res, 400, 'E_REDIRECT_URI_MISMATCH', 'redirect_uri is not an allowed callback for this client');
     }
-    // (3) PKCE S256 required
     if (!codeChallenge || method !== 'S256') {
       return json(res, 400, { error: 'invalid_request', message: 'code_challenge with S256 required', iss: base }, issHeader);
     }
-    // (4) resource must be the canonical resource URI
     if (resourceParam !== resource) {
       return json(res, 400, { error: 'invalid_request', message: `resource must be ${resource}`, iss: base }, issHeader);
     }
-    // (5) only after full validation do we build the request artifact.
-    // A client leg is always the owner sign-in. Re-auth has its own signed
-    // link: accepting flow=alias_reauth here let any client (a self-registered
-    // one, or a public CIMD client_id) start it and read the alias's scopes.
+    // Only after full validation, and always as owner_gate: a caller-supplied
+    // flow here would let any client read an alias's scopes via alias_reauth.
     const statePayload: StatePayload = {
       flow: 'owner_gate',
       client_id: clientId,
@@ -571,12 +543,8 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
       client_state: clientState,
       resource,
     };
-    // Confused-deputy defense (#3): a self-registered DCR client can pick an
-    // arbitrary redirect_uri, so before we send the owner to Google (whose
-    // consent screen names only THIS server, not the requesting app), show an
-    // approval interstitial naming the client + destination. CIMD clients skip
-    // it — their redirect_uris come from an issuer-allowlisted document a rogue
-    // cannot forge, so there is nothing to spoof.
+    // DCR clients get a consent interstitial naming the client + destination
+    // (confused-deputy defense); CIMD clients skip it. See docs/internals.md.
     if (client.dcr) {
       const pendingToken = await signPending(statePayload, base, flowSecret, nowSec());
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "frame-ancestors 'none'", 'X-Frame-Options': 'DENY' });
@@ -595,7 +563,6 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
     return toGoogle(res, statePayload);
   };
 
-  // GET /callback
   const callback: RouteHandler = async (req, res, url) => {
     const code = url.searchParams.get('code') ?? '';
     const stateToken = url.searchParams.get('state') ?? '';
@@ -659,20 +626,16 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
 
     if (st.flow === 'alias_reauth') {
       if (!st.alias) return errorPage(res, 400, 'invalid_request', 'alias_reauth without an alias');
-      // C13 / identity binding (#2/#6): only overwrite the alias's tokens if the
-      // completing Google identity IS that alias's configured account — else an
-      // attacker who crafts an alias_reauth link and logs in with their OWN
-      // account could inject their tokens (account swap). The alias emails (leg
-      // C) are distinct from MCP_OWNER_EMAILS (leg B), so bind to the alias.
+      // Identity binding: only overwrite the alias's tokens if the completing
+      // Google identity matches the alias's configured account (else account swap).
       const gotEmail = (exchanged.email ?? '').toLowerCase();
       const expected = (deps.aliasEmail?.(st.alias) ?? '').toLowerCase();
       if (!expected || !gotEmail || gotEmail !== expected) {
         log(`alias_reauth identity mismatch for "${logSafe(st.alias, 64)}" (got ${logSafe(gotEmail || 'none', 254)})`);
         return errorPage(res, 403, 'access_denied', 'the Google account you signed in with is not the one configured for this alias');
       }
-      // A completion without a refresh token (a Google URL built without
-      // offline access, say) would replace a working credential with one that
-      // dies within the hour. Keep the stored token instead.
+      // A completion without a refresh token would replace a working credential
+      // with one that dies within the hour; keep the stored token instead.
       const refreshToken = exchanged.tokens.refresh_token;
       if (typeof refreshToken !== 'string' || refreshToken === '') {
         log(`alias_reauth for "${logSafe(st.alias, 64)}" returned no refresh token; stored token kept`);
@@ -681,9 +644,8 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
       const granted = typeof exchanged.tokens.scope === 'string' ? exchanged.tokens.scope : undefined;
       const missing = deps.missingScopes?.(st.alias, granted) ?? [];
       const listed = missing.map((m) => `<code>${escapeHtml(m)}</code>`).join(', ');
-      // A narrower grant replaces nothing that works. The link can be reused
-      // for an hour and the Google URL's scope is not signed, so a narrower
-      // grant is not necessarily the account holder's choice.
+      // A narrower grant replaces nothing that works: the link is reusable for
+      // an hour and the scope isn't signed, so it may not be the holder's choice.
       if (missing.length > 0 && deps.hasToken?.(st.alias)) {
         log(`alias_reauth for "${logSafe(st.alias, 64)}" granted ${missing.length} fewer scope(s); stored token kept`);
         res.writeHead(400, { 'Content-Type': 'text/html' });
@@ -701,9 +663,8 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
       return true;
     }
 
-    // owner_gate: resolve the verified email to its subject (default = the
-    // owner allowlist -> 'owner'), discard Google tokens. The resolved sub is
-    // signed into the authz code and flows into every token minted from it.
+    // owner_gate: resolve the verified email to its subject (default: owner
+    // allowlist -> 'owner'), discard Google tokens; the sub signs into the authz code.
     const email = (exchanged.email ?? '').toLowerCase();
     const iss = encodeURIComponent(base);
     const resolved = email ? resolveSubject(email, { sub: exchanged.sub, hd: exchanged.hd }) : null;
@@ -727,7 +688,6 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
     return redirect(res, `${st.redirect_uri}${sep}code=${encodeURIComponent(authzCode)}${s}&iss=${iss}`);
   };
 
-  // POST /token
   const token: RouteHandler = async (req, res) => {
     let form: Record<string, string>;
     try {
@@ -805,8 +765,7 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
     return json(res, 400, { error: 'unsupported_grant_type', message: 'authorization_code or refresh_token only' });
   };
 
-  // POST /register (minimal DCR, D2). Parse the raw JSON body directly (the
-  // redirect_uris array must survive intact).
+  // Parse the raw JSON body directly; the redirect_uris array must survive intact.
   const register: RouteHandler = async (req, res) => {
     let parsed: unknown;
     try {

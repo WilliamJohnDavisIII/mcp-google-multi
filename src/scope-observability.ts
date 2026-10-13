@@ -4,7 +4,7 @@ import { readToken } from './token-store.js';
 import { reauthHint } from './reauth-hint.js';
 import { hints } from './hint-provider.js';
 
-// The #114 three-state model: what action, if any, reaches a granted state.
+// Three-state model: what action, if any, reaches a granted state.
 export type ScopeState = 'callable' | 'requestable_not_granted' | 'not_requestable';
 export type NotRequestableReason = 'add_bundle' | 'account_type' | 'unknown_scope';
 
@@ -15,9 +15,8 @@ export interface ScopeClassification {
   alsoIn?: string[];
 }
 
-// Reverse index scope -> bundles offering it, narrowest bundle first (fewest
-// scopes) so the remediation names the smallest grant. BASE_SCOPES map to the
-// pseudo-bundle "base" (outside a profile only via includesBase:false).
+// Reverse index scope -> bundles offering it, narrowest first, so the
+// remediation names the smallest grant.
 let reverseIndex: Map<string, string[]> | null = null;
 
 function scopeIndex(): Map<string, string[]> {
@@ -102,17 +101,14 @@ export function scopeHint(scope: string, c: ScopeClassification, alias: string):
           rendered?.hint ??
           (`Scope ${scope} is in ${alias}'s profile but not granted (you unchecked it at consent). ` +
             reauthHint(alias)),
-        // The ONE kind whose retriable the host may flip (Decision 3): the
-        // owner keeps true, a multi-tenant host may report false because the
-        // fix needs the user in a browser.
+        // The ONE kind whose retriable the host may flip, since the fix needs the user in a browser.
         retriable: rendered?.retriable ?? true,
       };
     }
     case 'not_requestable':
       if (c.reason === 'add_bundle') {
-        // "base" is a pseudo-bundle (BASE_SCOPES excluded by includesBase:
-        // false), NOT a catalog key — telling users to add it to bundles[]
-        // would fail boot with E_UNKNOWN_BUNDLE.
+        // "base" is a pseudo-bundle, not a catalog key: telling users to add
+        // it to bundles[] would fail boot with E_UNKNOWN_BUNDLE.
         if (c.bundle === 'base') {
           const rendered = hints()?.render({ kind: 'scope_base_excluded', account: alias, scope });
           return {
@@ -193,9 +189,8 @@ export function scopeHintForMethod(
   const best = classifyMethodScopes(required, sets.granted, sets.profile);
   if (!best || best.state === 'callable') return null; // 403 despite grants: not a scope-classification problem
   const base = scopeHint(best.scope, best.classification, alias);
-  // Hedged, never fabricated: an in-profile admin scope that 403s is EITHER a
-  // Workspace account needing re-auth OR a personal account that can never be
-  // granted admin — the inputs cannot distinguish, so say both.
+  // Hedged, never fabricated: the inputs can't distinguish a Workspace account
+  // needing re-auth from a personal account that can never grant admin, so say both.
   if (best.state === 'requestable_not_granted' && ADMIN_SCOPES.includes(best.scope)) {
     return {
       hint:
@@ -214,7 +209,7 @@ export interface ScopesReport {
   notRequestable: {
     addBundle: { scope: string; bundle: string }[];
     /** Runtime-signal bucket: static classification cannot prove account
-     * type; doctor (B9) fills it from observed persistent admin 403s. */
+     * type; doctor fills it from observed persistent admin 403s. */
     accountType: string[];
     unknown: string[];
   };
@@ -223,8 +218,7 @@ export interface ScopesReport {
 
 /**
  * The account_list / doctor block. Universe = profile ∪ granted ∪ the scopes
- * required by REGISTERED tools ("registered but not requestable" is the
- * original #114 ask).
+ * required by REGISTERED tools ("registered but not requestable" included).
  */
 export function buildScopesReport(
   granted: ReadonlySet<string>,

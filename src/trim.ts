@@ -20,9 +20,8 @@ export function sliceClean(text: string, max: number): string {
   return /[\uD800-\uDBFF]$/.test(sliced) ? sliced.slice(0, -1) : sliced;
 }
 
-// C0, DEL and C1 (NEL, 8-bit CSI and OSC) can end a line or drive a terminal;
-// the line and paragraph separators end a line for many readers; the bidi and
-// invisible format controls make a line read differently from its bytes.
+// C0/C1/DEL can end a line or drive a terminal; bidi/invisible format
+// controls make a line read differently from its bytes.
 const LOG_UNSAFE = /[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]/gu;
 
 /** An untrusted value made fit for one log line: never throws, at most `max`

@@ -14,9 +14,8 @@ const BREAKER_STALE_MS = 2_000;
 const PROCESS_START_MS = performance.timeOrigin;
 const OWNER_NAME = /^(\d+)\.(\d+|host)\.(\d+)\.([0-9a-f]{8}|0)\.[0-9a-f]{12}\.owner$/;
 
-/** Which process instance holds a lock: PID namespace id, start time in
- * clock ticks since boot, and a boot id prefix. A part this process cannot
- * read is `host` or `0` (all three without /proc). */
+// Which process instance holds a lock: PID namespace id, start time in clock
+// ticks since boot, and a boot id prefix; an unreadable part is `host` or `0`.
 interface LockIdentity {
   ns: string;
   start: string;
@@ -147,9 +146,8 @@ function holderDead(holder: LockHolder, now: number): boolean {
   // Two unreadable parts compare equal without naming the same namespace or
   // boot, so only a fully known identity is looked up by start time.
   if (SELF.ns !== 'host' && SELF.boot !== '0' && SELF.start !== '0' && owner.start !== '0') {
-    // A live namespace id is never shared, so the recorded pid is ours to
-    // look up: a restarted container reuses both the id and the pid, but not
-    // the start time.
+    // A live namespace id is never shared, so the recorded pid is ours to look
+    // up: a restarted container reuses both the id and the pid, but not the start time.
     const start = startOf(pid);
     if (start !== undefined) return start !== owner.start;
     return probeDead(pid) || leaseOver;
@@ -158,9 +156,8 @@ function holderDead(holder: LockHolder, now: number): boolean {
   return probeDead(pid) || leaseOver;
 }
 
-// One waiter at a time breaks a dead lock: two breakers could otherwise both
-// see the dead holder, and the second would unlink the first one's new lock.
-// False when another waiter is breaking it.
+// One waiter at a time breaks a dead lock, or the second could unlink the
+// first one's new lock; false when another waiter is already breaking it.
 function breakLock(lock: string, holder: LockHolder): boolean {
   const breaker = `${lock}.break`;
   // A token, not the inode: a breaker created after ours was removed can
@@ -206,10 +203,8 @@ function releaseBreaker(breaker: string, token: string): void {
   }
 }
 
-// Hardlink-based advisory lock, generalized path-keyed from the token store's
-// alias-keyed original. The lock body is the bare pid, as older readers expect;
-// the owner file stays linked while held and names the holder's process
-// instance. See docs/internals.md.
+// Hardlink-based advisory lock; the lock body is the bare pid, as older
+// readers expect. See docs/internals.md.
 export function withFileLock<T>(absPath: string, fn: () => T, label = `lock: ${absPath}`): T {
   const dir = path.dirname(absPath);
   const lock = path.join(dir, `.${path.basename(absPath)}.lock`);

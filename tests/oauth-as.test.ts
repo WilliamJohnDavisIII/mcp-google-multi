@@ -13,9 +13,8 @@ import { SsrfBlockedError } from '../src/ssrf-guard.js';
 import { CIMD_MAX_IN_FLIGHT } from '../src/cimd-cache.js';
 import { z } from "zod";
 
-/** Change one character in the middle of a JWT's signature. Changing the last
- * ones can leave it intact: base64url decoding ignores the final character's
- * low bits, so about one run in a thousand would not tamper at all. */
+/** Change one character in the middle of a JWT's signature; changing the last one can leave it
+ * intact, since base64url ignores the final character's low bits (~1 run in 1,000 wouldn't tamper). */
 const tamperSig = (jwt: string): string => {
   const i = jwt.lastIndexOf('.') + 10;
   return jwt.slice(0, i) + (jwt[i] === 'A' ? 'B' : 'A') + jwt.slice(i + 1);
@@ -127,7 +126,7 @@ const authorizeQuery = (over: Record<string, string> = {}) =>
   new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', resource: `${BASE}/mcp`, state: 'client-xyz', ...over }).toString();
 const form = (o: Record<string, string>) => ({ headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(o).toString() });
 
-describe('authenticate threads verified claims (S1.4)', () => {
+describe('authenticate threads verified claims', () => {
   const buildAs = () =>
     buildAuthServer(
       { base: BASE, resourceUri: `${BASE}/mcp`, secret, ownerEmails: ['owner@x.example'], cimdIssuers: ['claude.ai'], masterKey: 'mk', refreshStorePath: path.join(tmp, 'mcp-tokens.enc') },
@@ -156,7 +155,7 @@ describe('authenticate threads verified claims (S1.4)', () => {
   });
 });
 
-describe('redirectAllowed (C6)', () => {
+describe('redirectAllowed', () => {
   it('exact match, fixed claude.ai, and port-agnostic loopback', () => {
     expect(redirectAllowed(REDIRECT, [])).toBe(true); // fixed callback always allowed
     expect(redirectAllowed('https://claude.ai/cb', ['https://claude.ai/cb'])).toBe(true);
@@ -164,7 +163,7 @@ describe('redirectAllowed (C6)', () => {
     expect(redirectAllowed('http://127.0.0.1:5000/callback', ['http://localhost/callback'])).toBe(true); // loopback equiv
     expect(redirectAllowed('https://evil.example/cb', ['https://claude.ai/cb'])).toBe(false);
     expect(redirectAllowed('http://localhost:3118/other', ['http://localhost/callback'])).toBe(false); // path differs
-    // #1: a "127." prefix must NOT masquerade as loopback
+    // a "127." prefix must NOT masquerade as loopback
     expect(redirectAllowed('http://127.evil.com/callback', ['http://localhost/callback'])).toBe(false);
     expect(redirectAllowed('http://127.0.0.1.evil.com/callback', ['http://127.0.0.1/callback'])).toBe(false);
   });
@@ -187,12 +186,10 @@ describe('discovery metadata', () => {
 describe('happy path (legs A + B)', () => {
   it('authorize -> callback(owner) -> token -> /mcp -> refresh', async () => {
     const port = await start();
-    // /authorize -> 302 to Google with a signed state
     const authz = await req(port, 'GET', `/authorize?${authorizeQuery()}`);
     expect(authz.status).toBe(302);
     const state = stateFrom(authz.headers.location as string);
     expect(state).toBeTruthy();
-    // /callback owner_gate -> 302 back to client with a code + iss
     const cb = await req(port, 'GET', `/callback?code=owner-code&state=${encodeURIComponent(state)}`);
     expect(cb.status).toBe(302);
     const back = new URL(cb.headers.location as string);
@@ -201,18 +198,15 @@ describe('happy path (legs A + B)', () => {
     expect(back.searchParams.get('state')).toBe('client-xyz');
     const code = back.searchParams.get('code')!;
     expect(code).toBeTruthy();
-    // /token authorization_code -> access + refresh
     const tok = JSON.parse((await req(port, 'POST', '/token', form({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, code_verifier: verifier, resource: `${BASE}/mcp` }))).text);
     expect(tok.access_token).toBeTruthy();
     expect(tok.refresh_token).toBeTruthy();
-    // POST /mcp with the Bearer -> initialize works
     const init = await req(port, 'POST', '/mcp', {
       headers: { authorization: `Bearer ${tok.access_token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'c', version: '0' } } }),
     });
     expect(init.status).toBe(200);
     expect(JSON.parse(init.text).result.serverInfo.name).toBe('as-test');
-    // refresh -> a rotated token
     const ref = JSON.parse((await req(port, 'POST', '/token', form({ grant_type: 'refresh_token', refresh_token: tok.refresh_token }))).text);
     expect(ref.access_token).toBeTruthy();
     expect(ref.refresh_token).not.toBe(tok.refresh_token);
@@ -251,7 +245,7 @@ describe('success-path observability (logs completions, not just failures)', () 
   });
 });
 
-describe('negative paths (one per §5.12 MUST)', () => {
+describe('negative paths (one per spec MUST)', () => {
   it('CIMD fetch fail / unknown issuer -> 400 invalid_client (SSRF-blocked)', async () => {
     const port = await start();
     const r = await req(port, 'GET', `/authorize?${authorizeQuery({ client_id: 'https://evil.example/c' })}`);
@@ -413,14 +407,13 @@ describe('negative paths (one per §5.12 MUST)', () => {
     expect(authz.headers['content-type']).toContain('text/html');
     expect(authz.text).toContain('attacker.example');
     expect(authz.text).toContain('name="pending"');
-    // extract the pending token and approve
     const pending = authz.text.match(/name="pending" value="([^"]+)"/)![1];
     const approved = await req(port, 'POST', '/authorize', { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ pending }).toString() });
     expect(approved.status).toBe(302);
     expect(new URL(approved.headers.location as string).searchParams.get('state')).toBeTruthy();
   });
 
-  it('clientless alias_reauth link (BV-1 in-call re-auth) redirects to Google with no client leg', async () => {
+  it('clientless alias_reauth link (in-call re-auth) redirects to Google with no client leg', async () => {
     const port = await start();
     const r = await req(port, 'GET', reauthPath('work'));
     expect(r.status).toBe(302);
@@ -446,7 +439,7 @@ describe('negative paths (one per §5.12 MUST)', () => {
     }
   });
 
-  // alpha.57 signed a DCR pending with flow=alias_reauth; one still inside its
+  // An earlier release signed a DCR pending with flow=alias_reauth; one still inside its
   // TTL at upgrade must not start the old unauthenticated re-auth.
   it('POST /authorize refuses a pending signed with MCP_JWT_KEY, as an earlier release signed its alias_reauth ones', async () => {
     const asked: string[] = [];
@@ -532,7 +525,7 @@ describe('negative paths (one per §5.12 MUST)', () => {
   });
 });
 
-describe('owner_gate Google leg is bound to the browser that started it (H4 F1)', () => {
+describe('owner_gate Google leg is bound to the browser that started it', () => {
   const ATTACKER_CB = 'https://attacker.example/cb';
   const bindCookies = (jar: Jar) => [...jar.keys()].filter((k) => k.includes('mgm-og-'));
 
@@ -810,7 +803,7 @@ describe('owner_gate Google leg is bound to the browser that started it (H4 F1)'
   });
 });
 
-describe('a failed Google code exchange answers a generic page (H4 F12)', () => {
+describe('a failed Google code exchange answers a generic page', () => {
   const detail = 'request to https://oauth2.googleapis.com/token failed, reason: connect ECONNREFUSED 10.9.8.7:3128\nproxy-authorization: Basic c2VjcmV0';
 
   it('owner_gate and alias_reauth show no exchange detail; the log gets it on one line', async () => {
@@ -857,7 +850,7 @@ describe('a failed Google code exchange answers a generic page (H4 F12)', () => 
   });
 });
 
-describe('a hostile value reaches the log as one escaped, bounded line (H4 F7)', () => {
+describe('a hostile value reaches the log as one escaped, bounded line', () => {
   const UNSAFE = /[\r\n\u2028\u2029\p{Cc}]/u;
   const NEL = String.fromCharCode(0x85);
   const ALIAS = 'side\ncallback ok flow=alias_add alias=forged';
@@ -986,7 +979,7 @@ describe('a hostile value reaches the log as one escaped, bounded line (H4 F7)',
   });
 });
 
-describe('CIMD fetches at /authorize are capped, and cached only once valid (H4 F6)', () => {
+describe('CIMD fetches at /authorize are capped, and cached only once valid', () => {
   /** A fetchCimd whose `/held-` documents wait for release(); every call is recorded. */
   function heldCimd() {
     const gates: (() => void)[] = [];
@@ -1103,15 +1096,15 @@ describe('DCR /register bounds (unbounded-store DoS guard)', () => {
     const reg = await req(port, 'POST', '/register', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['https://new.example/cb'] }) });
     expect(reg.status).toBe(201);
     const newId = JSON.parse(reg.text).client_id as string;
-    expect(registeredClients.size).toBe(DCR_MAX_CLIENTS); // did not grow past the cap
-    expect(registeredClients.has('seed-0')).toBe(false); // oldest evicted
-    expect(registeredClients.has(newId)).toBe(true); // newest present
+    expect(registeredClients.size).toBe(DCR_MAX_CLIENTS);
+    expect(registeredClients.has('seed-0')).toBe(false);
+    expect(registeredClients.has(newId)).toBe(true);
   });
 });
 
 type AuthServerDepsMint = ReturnType<typeof buildAuthServer>['mintFlowState'];
 
-describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
+describe('refresh lifetimes on AuthServerConfig', () => {
   // deps.now also dates the state and the code, which jose checks against the
   // real clock, so the code is redeemed at off = 0 and only refreshes move on.
   let off = 0;
@@ -1139,7 +1132,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
     expect(r.body.access_token).toBeUndefined();
   };
 
-  it('O1 refreshIdleSec ends a session that long after its last refresh', async () => {
+  it('refreshIdleSec ends a session that long after its last refresh', async () => {
     const port = await startWith({ refreshIdleSec: 60 });
     const first = await signIn(port);
     const r1 = await refreshAt(port, 59_000, first);
@@ -1147,7 +1140,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
     expectInvalidGrant(await refreshAt(port, 119_000, r1.body.refresh_token));
   });
 
-  it('O2 refreshMaxAgeSec ends a session that long after its sign-in, however often it refreshes', async () => {
+  it('refreshMaxAgeSec ends a session that long after its sign-in, however often it refreshes', async () => {
     const port = await startWith({ refreshMaxAgeSec: 120 });
     let t = await signIn(port);
     for (const at of [60_000, 119_000]) {
@@ -1158,7 +1151,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
     expectInvalidGrant(await refreshAt(port, 121_000, t));
   });
 
-  it('O3 a lifetime together with an injected refreshStore throws; an injected store alone works', () => {
+  it('a lifetime together with an injected refreshStore throws; an injected store alone works', () => {
     const cfg = { base: BASE, resourceUri: `${BASE}/mcp`, secret, ownerEmails: ['owner@x.example'], cimdIssuers: ['claude.ai'], masterKey: 'mk', refreshStorePath: path.join(tmp, 'mcp-tokens.enc') };
     const refreshStore = new RefreshStore(path.join(tmp, 'injected.enc'), 'mk');
     for (const over of [{ refreshMaxAgeSec: 60 }, { refreshIdleSec: 60 }, { refreshMaxFamiliesPerSub: 10 }]) {
@@ -1168,7 +1161,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
     expect(() => buildAuthServer({ ...cfg, refreshIdleSec: 60 })).not.toThrow();
   });
 
-  it('O4 refreshMaxFamiliesPerSub reaches the refresh store buildAuthServer creates: a subject over the cap has its least-recently-used session dropped', async () => {
+  it('refreshMaxFamiliesPerSub reaches the refresh store buildAuthServer creates: a subject over the cap has its least-recently-used session dropped', async () => {
     const port = await startWith({ refreshMaxFamiliesPerSub: 1 });
     const first = await signIn(port);
     const second = await signIn(port); // same owner subject: 2nd sign-in exceeds the cap of 1, drops the 1st
@@ -1182,7 +1175,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
     expect(() => buildAuthServer({ ...cfg, refreshMaxFamiliesPerSub: 0 })).toThrow('E_REFRESH_OPTION_INVALID: maxFamiliesPerSub must be a positive whole number');
   });
 
-  it('O5 revoked and expired families reach the log with a tag, never the token, subject or email', async () => {
+  it('revoked and expired families reach the log with a tag, never the token, subject or email', async () => {
     const logs: string[] = [];
     const port = await startWith({ refreshIdleSec: 60 }, { log: (l) => logs.push(l) });
     const stolen = await signIn(port);
@@ -1208,7 +1201,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
   });
 });
 
-describe('alias_add flow + resolveSubject seam (S1.14)', () => {
+describe('alias_add flow + resolveSubject seam', () => {
   const binds: Record<string, unknown>[] = [];
   afterEach(() => void binds.splice(0));
 
@@ -1528,9 +1521,9 @@ describe('alias_add flow + resolveSubject seam (S1.14)', () => {
     expect(seen).toEqual([['member@x.example', { sub: undefined, hd: undefined }]]);
   });
 
-  // H3 PR1: a resolveSubject denial may explain itself; null keeps today's
+  // A resolveSubject denial may explain itself; null keeps today's
   // bare redirect exactly.
-  describe('resolveSubject denial (H3)', () => {
+  describe('resolveSubject denial', () => {
     it('a denial with a description adds error_description to the access_denied redirect', async () => {
       const { port } = await startMt({}, {
         resolveSubject: () => ({ denied: { description: 'This workspace is suspended by its operator.' } }),

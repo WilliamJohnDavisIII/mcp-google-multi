@@ -10,12 +10,11 @@ export interface Policy {
   allow: string[];
   deny: string[];
   /**
-   * B14 reserved seam (cc-write-control "HTTP posture", LOCKED to OQ-5
-   * "annotations only"): the dispatch transport is threaded into the resolved
-   * policy for the EE/future seam, but in v6 alpha it does NOT stiffen the
+   * Reserved seam (HTTP posture is "annotations only"): the dispatch
+   * transport is threaded into the resolved policy for a future seam, but in v6 alpha it does NOT stiffen the
    * profile or alter any `isAllowed` verdict. "Stricter on HTTP" is achieved
    * entirely by the `anthropic/requiresUserInteraction` annotation on the
-   * irreversible set (A12), emitted identically on both transports.
+   * irreversible set, emitted identically on both transports.
    * Optional so existing Policy literals (codegen/tests) need no change;
    * resolvePolicy always populates it.
    */
@@ -26,15 +25,14 @@ interface ToolRef {
   name: string;
   service: string;
   cud: Cud;
-  /** The method's required OAuth scopes, when the caller knows them. Absent
-   * means "unknown", which is treated as not privileged: a missing scope list
-   * must not silently widen the gate OR silently break an ordinary write. */
+  // Absent means "unknown", treated as not privileged: a missing scope list
+  // must not silently widen the gate or break an ordinary write.
   scopes?: readonly string[];
 }
 
 const PROFILES: Profile[] = ['read-only', 'safe-writes', 'full-writes'];
 
-/** The irreversible set (frozen, cc-write-control): real sends leave the
+/** The irreversible set (frozen): real sends leave the
  * user's (or org's) identity unrecallably; permanent deletes bypass Trash.
  * Includes the callable GENERATED twins of the curated ops — the surface is
  * always callable by name, so a prompt-free twin would defeat the layer.
@@ -108,9 +106,8 @@ function matchesAny(tool: ToolRef, globs: string[]): boolean {
   return firstMatch(tool, globs) !== undefined;
 }
 
-/** Scopes that authorize acting on the whole organization, on legal holds, on
- * billing, or on deployed code. A write behind one of these is not a "safe"
- * write in any useful sense of the word, whatever its HTTP verb. */
+// Scopes that authorize acting on the whole organization, legal holds,
+// billing, or deployed code: not a "safe" write, whatever its HTTP verb.
 const PRIVILEGED_SCOPE_RE =
   /\/auth\/(admin\.directory|admin\.datatransfer|cloud-identity|apps\.licensing|apps\.order|apps\.groups\.settings|apps\.groups\.migration|ediscovery|script\.projects|script\.deployments)/;
 

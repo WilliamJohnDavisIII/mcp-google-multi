@@ -1,9 +1,5 @@
-// H4 F6: GET /authorize is unauthenticated, and a client_id on an allowlisted
-// issuer with a path never seen before forces an outbound fetch. So the
-// fetches running at once are capped, one client_id is fetched once however
-// many requests wait on it, and only a document that passed validation is
-// kept. Errors are never cached (CIMD section 5.2), and a negative cache would
-// not help anyway: the attack varies the path, so its key never repeats.
+// Bounds the unauthenticated-fetch surface of GET /authorize: capped
+// in-flight fetches, one fetch per client_id, no error caching. See docs/internals.md.
 
 import { CimdHttpError, isTransientFetchError, SsrfBlockedError } from './ssrf-guard.js';
 import { logSafe } from './trim.js';
@@ -81,14 +77,12 @@ export class CimdClientCache {
       }
     } catch (e) {
       out = { error: e instanceof SsrfBlockedError ? 'E_CIMD_SSRF_BLOCKED' : 'E_CIMD_INVALID' };
-      // A document that went bad is never served stale. An issuer that is down
-      // or overloaded says nothing about the document, so the last good one
-      // stays and answers this fetch's requests too (stale-if-error; the error
-      // itself is never stored).
+      // stale-if-error: an issuer that's down/overloaded says nothing about
+      // the document, so the last good one stays and serves this fetch too.
       const stale = this.entries.get(clientId);
       if (!saysNothingAboutDocument(e)) this.entries.delete(clientId);
       else if (stale && this.deps.now() - stale.at < CIMD_MAX_STALE_MS) out = { doc: stale.doc, fresh: false };
-      // #13: the detail goes to the log only; the caller gets a generic answer.
+      // The detail goes to the log only; the caller gets a generic answer.
       this.deps.log(`CIMD fetch failed for ${logSafe(clientId, 128)}: ${logSafe(e instanceof Error ? e.message : 'non-Error rejection', 200)}`);
     } finally {
       this.inFlight.delete(clientId);

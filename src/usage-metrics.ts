@@ -5,14 +5,8 @@ import { randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { withFileLock, atomicWriteFileSync } from './fs-atomic.js';
 
-// Local usage metrics (metrics-feature-spec.md). Default OFF at every layer;
-// when off, nothing here initializes and the dispatch chain carries no wrapper.
-// Zero network egress is structural: this module's import set is a tested
-// allowlist (fs/path/os/crypto/perf_hooks/fs-atomic), so egress code cannot
-// even be expressed here. Every string persisted is a member of a server-owned
-// closed vocabulary, matches a pinned shape regex, or is other/unknown_*/
-// _overflow; free text is unrepresentable in the file format. No identity
-// dimension of any kind: no aliases, hashes, emails, or exact account counts.
+// Local usage metrics, default OFF; zero network egress is structural (a
+// tested import allowlist). See docs/usage-metrics.md.
 
 export const METRICS_DIR_NAME = 'metrics';
 const FLUSH_MS = 60_000;
@@ -30,7 +24,7 @@ const LAT_BOUNDS = [100, 250, 500, 1000, 2500, 5000, 10000, 30000] as const;
 const CHARS_BOUNDS = [64, 256, 1024, 4096, 16384, 65536] as const;
 
 // methodId backstop shape gate: even a tampered discovery cache cannot turn
-// arbitrary strings into recorded values (spec section 1).
+// arbitrary strings into recorded values.
 const METHOD_ID_RE = /^[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+$/;
 const METHOD_ID_MAX = 128;
 const TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
@@ -439,9 +433,8 @@ export class Metrics {
       addInto(f as unknown as Record<string, number>, fan);
     }
 
-    // retry self-correction chain (spec section 1): in-memory only. Both
-    // chains link consecutive calls, so they only run when one caller owns
-    // the process (sequencingEnabled).
+    // retry self-correction chain, in-memory only; links consecutive calls,
+    // so it only runs when one caller owns the process (sequencingEnabled).
     const nowM = this.mono();
     if (this.sequencing) {
       const prev = this.lastError.get(entry.name);

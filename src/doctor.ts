@@ -17,11 +17,8 @@ import { resolveHttpConfig, HttpConfigError, type HttpConfig } from './http-conf
 import { parseOwnerEmails } from './http-transport.js';
 import { hints } from './hint-provider.js';
 
-// B9: one engine (runDiagnostics), two skins — `doctor` (CLI glyph) and
-// `diagnose` (agent tool, structured). Sections 1-6 here; section 7 (HTTP:
-// PRM/AS-metadata self-fetch, MCP_PUBLIC_URL canonicalization) is owned by the
-// OAuth AS and lands with that cluster (B11-B14), so it is reported as a
-// deferred note, never a FAIL. Read-only (BR7): no mutation, only probes.
+// One engine (runDiagnostics), two skins; `doctor` (CLI glyph) and `diagnose`
+// (agent tool, structured). Read-only: no mutation, only probes.
 
 export type Verdict = 'ok' | 'warn' | 'fail' | 'unknown';
 
@@ -98,9 +95,8 @@ const DEFAULT_DEPS: DiagnosticsDeps = {
   probeHttp: (cfg) => probeHttpEndpoints(cfg),
 };
 
-/** §7 live check: the advertised OAuth metadata must derive from MCP_PUBLIC_URL
- * exactly — one mismatch between PRM `resource` / AS `issuer` and what clients
- * compute from the public URL is the perpetual-401 interop bug (BR4). */
+// §7 live check: a mismatch between PRM/AS metadata and what clients compute
+// from the public URL is the perpetual-401 interop bug.
 async function probeHttpEndpoints(cfg: HttpConfig): Promise<HttpProbeResult> {
   try {
     const prmRes = await fetch(`${cfg.publicUrl}/.well-known/oauth-protected-resource`, {
@@ -127,7 +123,7 @@ async function probeHttpEndpoints(cfg: HttpConfig): Promise<HttpProbeResult> {
   }
 }
 
-/** Console deep-link to enable one API (section-6 hint, error taxonomy B10). */
+/** Console deep-link to enable one API (section-6 hint). */
 export function apiEnableLink(api: string): string {
   return `https://console.cloud.google.com/apis/library/${api}.googleapis.com`;
 }
@@ -139,8 +135,8 @@ function sectionRuntime(deps: DiagnosticsDeps, tenantScope = false): DiagnosticS
   const major = Number.parseInt(deps.nodeVersion.split('.')[0] ?? '0', 10);
   if (!Number.isFinite(major) || major < MIN_NODE_MAJOR) {
     if (tenantScope) {
-      // The host version is operator infrastructure, not the tenant's (E7
-      // residue): no version string, and the fix is the operator's to apply.
+      // The host version is operator infrastructure, not the tenant's: no
+      // version string, and the fix is the operator's to apply.
       const rendered = hints()?.render({ kind: 'operator_only', slug: 'E_NODE_TOO_OLD' });
       return {
         id: 1,
@@ -221,7 +217,7 @@ function sectionConfig(deps: DiagnosticsDeps, set: ReturnType<typeof getAccountS
 }
 
 /** One line, state AND source, so the people being measured can see both
- * here and in `diagnose` (metrics spec section 2). Read-only. */
+ * here and in `diagnose`. Read-only. */
 export function usageMetricsStatusLine(env: Record<string, string | undefined>): string {
   const envSrc = envValueSource('GOOGLE_USAGE_METRICS');
   let configValue: boolean | undefined;
@@ -310,8 +306,7 @@ async function sectionApiEnablement(deps: DiagnosticsDeps, aliases: string[], te
     results = await deps.probeApi(healthy);
   } catch (e: any) {
     // Network / transient: WARN with the target, never crash the report. The
-    // raw text can name an egress or proxy host (E7 residue): tenant scope
-    // drops it.
+    // raw text can name an egress or proxy host: tenant scope drops it.
     return {
       id: 6,
       title: 'API enablement',
@@ -415,10 +410,8 @@ export async function runDiagnostics(
   deps: DiagnosticsDeps = DEFAULT_DEPS,
   opts: { scope?: 'operator' | 'tenant' } = {},
 ): Promise<DiagnosticsReport> {
-  // Tenant scope omits the OPERATOR sections: §3 (key provenance = box
-  // infrastructure) and §7 (its owner-gate lines print MCP_OWNER_EMAILS
-  // values — other people's addresses from a tenant's seat), and trims §2 to
-  // the context's own account count.
+  // Tenant scope omits the OPERATOR sections (§3 key provenance, §7 owner-gate
+  // emails) and trims §2 to the context's own account count.
   const tenantScope = opts.scope === 'tenant';
   const sections: DiagnosticSection[] = [];
   sections.push(sectionRuntime(deps, tenantScope));
@@ -463,10 +456,8 @@ export function renderDoctorText(report: DiagnosticsReport): string {
 const EMAIL_LOCAL_CHAR = /[A-Za-z0-9._%+-]/;
 const EMAIL_DOMAIN_CHAR = /[A-Za-z0-9.-]/;
 
-/** Mask the local-part of an email so a report never carries a full address
- * (BR8). A linear scan, not a regex: the `local* @domain` pattern backtracks
- * polynomially on long local-charset runs without an @ (CodeQL
- * js/polynomial-redos), and report text can embed arbitrary error strings. */
+// A linear scan, not a regex: `local*@domain` backtracks polynomially on long
+// local-charset runs without an @ (CodeQL js/polynomial-redos).
 function maskEmails(text: string): string {
   let out = '';
   let i = 0;
@@ -490,7 +481,7 @@ function maskEmails(text: string): string {
   return out;
 }
 
-/** Redacted, paste-ready bug report (BR8): verdicts + provenance labels + token
+/** Redacted, paste-ready bug report: verdicts + provenance labels + token
  * statuses + slugs; NO token values, secrets, keys, or full email addresses. */
 export function renderReport(report: DiagnosticsReport, version: string): string {
   const out: string[] = [`mcp-google-multi doctor report (v${version})`, `overall: ${report.verdict}`, ''];
@@ -564,7 +555,7 @@ export function registerDiagnoseTool(registry: ToolRegistry, ctx?: DiagnoseConte
   );
 }
 
-// --- B6 reset ---------------------------------------------------------------
+// --- reset ------------------------------------------------------------------
 
 export interface ResetOptions {
   account?: string;

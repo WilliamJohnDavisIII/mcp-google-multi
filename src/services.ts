@@ -71,22 +71,17 @@ export const GENERATED_GATES: Record<string, { enabled: (set?: AccountSet) => bo
   vault: bundleGate('vault'),
 };
 
-/**
- * Message for a `tools/call` naming a tool that is not registered. The SDK's
- * own answer is a bare "Tool X not found", which reads identically for a typo,
- * for a service gated behind a scope bundle, and for an API this server has
- * never heard of. Those need different next steps, and the server knows which
- * is which: it composed the enabled-service list at boot.
- */
 const MAX_TOOL_NAME_ECHO = 64;
 
+/** Message for a `tools/call` naming a tool that is not registered: the SDK's
+ * bare "Tool X not found" reads identically for a typo, a gated service, and
+ * an unknown API, but the server knows which is which from its boot-time enabled-service list. */
 export function unknownToolMessage(registry: ToolRegistry, rawName: string): string {
   // The name is the caller's, unvalidated: echo a bounded prefix only.
   const name = rawName.length > MAX_TOOL_NAME_ECHO ? `${sliceClean(rawName, MAX_TOOL_NAME_ECHO)}...` : rawName;
 
-  // A service that EXISTS in the build but registered nothing is off, not
-  // misspelled. Checked before the did-you-mean, which would otherwise point
-  // chat_spaces_get at meet_spaces_get.
+  // A service that EXISTS but registered nothing is off, not misspelled;
+  // checked before the did-you-mean, which would otherwise point chat_spaces_get at meet_spaces_get.
   const service = serviceOf(name);
   const known = SERVICES.some((s) => s.name === service) || GENERATED_SERVICES.some((s) => s.name === service);
   if (known && !registry.services().includes(service)) {

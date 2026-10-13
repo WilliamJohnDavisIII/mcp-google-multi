@@ -172,8 +172,7 @@ describe('registry integration + flag', () => {
   });
 });
 
-// The reject path had no coverage at all while it was opt-in. It is the
-// default now, so every branch that decides forward-vs-reject is pinned here.
+// reject is the default, so every branch that decides forward-vs-reject is pinned here.
 describe('screenMessage (unknown-argument screening)', () => {
   const DECLARED: Record<string, readonly string[]> = {
     drive_create_folder: ['account', 'name', 'parentFolderId'],
@@ -244,9 +243,8 @@ describe('screenMessage (unknown-argument screening)', () => {
     const msg = call('drive_create_folder', { parentId: 'x' });
     const out = screenMessage(msg, strict('warn', onDrop), log);
     expect(out.action).toBe('forward');
-    // The caller's own key is never handed to the metrics observer: only the
-    // DECLARED key it resolved to, or the literal placeholder. That is the
-    // closed-vocabulary rule that keeps local metrics free of caller strings.
+    // The caller's own key is never handed to the metrics observer, only the DECLARED key it resolved
+    // to (or the literal placeholder); a closed vocabulary that keeps local metrics free of caller strings.
     expect(onDrop).toHaveBeenCalledWith('drive_create_folder', ['parentFolderId']);
     expect(String(log.mock.calls[0]?.[0])).toContain('dropped');
   });

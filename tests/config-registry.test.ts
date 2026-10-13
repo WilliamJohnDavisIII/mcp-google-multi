@@ -30,7 +30,7 @@ const spyExit = () => {
 };
 
 describe('resolveAccounts', () => {
-  it('BR-2: non-empty GOOGLE_ACCOUNTS takes the whole registry from env', () => {
+  it('non-empty GOOGLE_ACCOUNTS takes the whole registry from env', () => {
     writeFileSync(
       cfgPath,
       JSON.stringify({ version: 1, accounts: { fileacct: { email: 'f@x.com' } } }),
@@ -69,11 +69,9 @@ describe('resolveAccounts', () => {
     expect(set.configs.b.admin).toBe(true);
   });
 
-  it('empty registry is non-fatal at module-load severity (gap #23): returns an empty set, never exits', () => {
-    // The refuse-to-start moved off module load so the bootstrap/diagnostic CLIs
-    // (doctor/reset/import/config check) can run on a fresh install. The SERVER
-    // still refuses empty via assertServerAccountsConfigured(); the dispatch
-    // reload ('throw') still raises (see the reload-safety test below).
+  it('empty registry is non-fatal at module-load severity: returns an empty set, never exits', () => {
+    // The refuse-to-start moved off module load so bootstrap/diagnostic CLIs can run on a fresh install;
+    // the SERVER still enforces it via assertServerAccountsConfigured(), and dispatch reload still throws.
     const { exit } = spyExit();
     const set = resolveAccounts({} as NodeJS.ProcessEnv, cfgPath);
     expect(set.aliases).toEqual([]);
@@ -112,7 +110,7 @@ describe('resolveAccounts', () => {
   });
 });
 
-describe('resolveAccounts tokenDir threading (S1.6)', () => {
+describe('resolveAccounts tokenDir threading', () => {
   it('opts.tokenDir scopes every tokenPath/encPath; default stays the global dir', () => {
     writeFileSync(cfgPath, JSON.stringify({ version: 1, accounts: { work: { email: 'w@x.com' } } }));
     const scoped = resolveAccounts({} as NodeJS.ProcessEnv, cfgPath, 'exit', { tokenDir: path.join(base, 'tenant-tokens') });
@@ -147,7 +145,7 @@ describe('resolveAccounts emptyOk (a context with nothing linked yet)', () => {
   });
 });
 
-describe('fileStamp (exported for tenant-scoped resolvers, S1.6)', () => {
+describe('fileStamp (exported for tenant-scoped resolvers)', () => {
   it('stamps version:mtime for an existing file and version:0 for a missing one', () => {
     writeFileSync(cfgPath, '{}');
     const stamped = fileStamp(cfgPath, CONFIG_VERSION);

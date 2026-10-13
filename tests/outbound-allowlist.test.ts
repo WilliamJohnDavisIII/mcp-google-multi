@@ -52,7 +52,7 @@ describe('outboundViolations / checkOutbound', () => {
     expect(j.account).toBe('work');
   });
 
-  it('a hint provider renders outbound_denied with the kind, the target and the entries (H3)', () => {
+  it('a hint provider renders outbound_denied with the kind, the target and the entries', () => {
     const seen: unknown[] = [];
     setHintProvider({
       render: (c) => {

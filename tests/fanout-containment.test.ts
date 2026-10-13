@@ -9,10 +9,8 @@ import type { Metrics } from '../src/usage-metrics.js';
 
 afterEach(() => setHintProvider(null));
 
-// S1.8 containment (the #162 shape): a '*' selector against a registry built
-// with one alias set must never enumerate another registry's (or the global)
-// alias set. Red-first: against the accessor-less registry this fans out over
-// the GLOBAL account set instead of the registry's own.
+// Containment: a '*' selector against a registry built with one alias set must never enumerate another
+// registry's (or the global) alias set; the accessor-less registry once fanned out over the GLOBAL set instead.
 
 const POLICY: Policy = { profile: 'read-only', readOnly: true, allow: [], deny: [] };
 
@@ -56,7 +54,7 @@ function fannedAccounts(envelope: { content: { text: string }[] }): string[] {
   return (parsed.results ?? []).map((r) => r.account);
 }
 
-describe('fan-out containment (S1.8, #162 shape)', () => {
+describe('fan-out containment (#162 shape)', () => {
   it("'*' on registry A enumerates exactly A's aliases, never B's or the global set", async () => {
     const a = buildRegistryWith(['a1', 'a2']);
     const b = buildRegistryWith(['b1']);
@@ -107,7 +105,7 @@ describe('fan-out containment (S1.8, #162 shape)', () => {
   });
 });
 
-describe('runFanout per-account throw (H3)', () => {
+describe('runFanout per-account throw', () => {
   it('with no provider the per-account throw renders internal with no hint field (unchanged)', async () => {
     const res = await runFanout(async () => { throw new Error('boom'); }, [{}], ['a1']);
     const payload = JSON.parse(res.content[0].text) as { results: { error: { error: string; message: string; hint?: string } }[] };

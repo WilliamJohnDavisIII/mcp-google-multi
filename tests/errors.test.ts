@@ -66,7 +66,6 @@ describe('mapGoogleError', () => {
     expect(scoped.hint).not.toBe('share the file first');
   });
 
-  // B10 noob-proofing hints
   it('403 accessNotConfigured → api_not_enabled with the per-API enable link', () => {
     const e = mapGoogleError({
       code: 403,
@@ -278,9 +277,8 @@ describe('mapGoogleError local-filesystem paths', () => {
   });
 });
 
-// gaxios copies the ENTIRE response body into error.message when the body is a
-// string, which is how 8.5 KB of Google's HTML front-end page ended up inside
-// a JSON error envelope.
+// gaxios copies the ENTIRE response body into error.message when the body is a string; an 8.5 KB
+// HTML front-end page once ended up inside a JSON error envelope this way.
 describe('non-JSON bodies never reach the envelope', () => {
   const acc = 'work' as never;
   const htmlPage = `<!DOCTYPE html><html><head><title>Error 404</title></head><body>${'x'.repeat(9000)}</body></html>`;
@@ -398,10 +396,9 @@ describe('local preconditions are not Google failures', () => {
   });
 });
 
-// H3 PR1: with no provider every case above is unchanged (case A, proven by
-// the untouched assertions above). Case B: a stub provider routes and sees
-// the right facts, for every call site this file can reach.
-describe('hint provider routing (H3)', () => {
+// With no provider every case above is unchanged (proven by the untouched assertions above); with a
+// stub provider installed, it routes and sees the right facts for every call site this file can reach.
+describe('hint provider routing', () => {
   it('401 auth_required renders kind reauth with the account', () => {
     const seen = echoProvider();
     const e = mapGoogleError({ code: 401, message: 'Invalid Credentials' }, acc);

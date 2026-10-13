@@ -67,7 +67,7 @@ describe('http-transport pure helpers', () => {
   });
 });
 
-// ---- integration: real McpServer over the host (BV-3) ------------------------
+// ---- integration: real McpServer over the host -------------------------------
 
 const hosts: HttpTransportHost[] = [];
 afterEach(async () => {
@@ -151,7 +151,7 @@ const initBody = {
   params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
 };
 
-describe('HttpTransportHost (BV-3: stateless dispatch)', () => {
+describe('HttpTransportHost (stateless dispatch)', () => {
   // Every frame of a batch is screened synchronously in one tick, so an
   // uncapped batch multiplied any per-call cost by the frames in one body.
   it('refuses a JSON-RPC batch above the frame cap before dispatching any of it', async () => {
@@ -188,7 +188,7 @@ describe('HttpTransportHost (BV-3: stateless dispatch)', () => {
     expect(names).toContain('ping');
   });
 
-  it('stamps the authenticated sub into ctx.http.authInfo.extra for tool handlers (S1.4)', async () => {
+  it('stamps the authenticated sub into ctx.http.authInfo.extra for tool handlers', async () => {
     const port = await startHost(() => ({ ok: true, sub: 'tenant-42' }));
     await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT }, body: initBody });
     const res = await request(port, 'POST', '/mcp', {
@@ -200,7 +200,7 @@ describe('HttpTransportHost (BV-3: stateless dispatch)', () => {
   });
 
   it('defaults the stamped sub to owner when the authenticator carries none', async () => {
-    const port = await startHost(); // default authenticator returns a bare {ok: true}
+    const port = await startHost();
     await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT }, body: initBody });
     const res = await request(port, 'POST', '/mcp', {
       headers: { accept: MCP_ACCEPT },
@@ -210,7 +210,7 @@ describe('HttpTransportHost (BV-3: stateless dispatch)', () => {
     expect(JSON.parse(res.text).result.content[0].text).toBe('owner');
   });
 
-  it('resolveServer routes two subjects to two distinct servers (S1.15)', async () => {
+  it('resolveServer routes two subjects to two distinct servers', async () => {
     const named = (marker: string) => {
       const s = new McpServer({ name: `srv-${marker}`, version: '0.0.0' });
       s.registerTool('marker', { description: 'which server am I', inputSchema: z.object({}) }, async () => ({
@@ -363,7 +363,7 @@ describe('HttpTransportHost (BV-3: stateless dispatch)', () => {
     expect(boot.argShapeFor).not.toHaveBeenCalled();
   });
 
-  it('per-subject lock lanes are independent: one tenant\'s slow call never queues another\'s (S1.15)', async () => {
+  it('per-subject lock lanes are independent: one tenant\'s slow call never queues another\'s', async () => {
     const named = (marker: string, delayMs: number) => {
       const s = new McpServer({ name: `srv-${marker}`, version: '0.0.0' });
       s.registerTool('work', { description: 'do work', inputSchema: z.object({}) }, async () => {
@@ -398,7 +398,7 @@ describe('HttpTransportHost (BV-3: stateless dispatch)', () => {
     const slowP = callWork('slow');
     const fastP = callWork('fast');
     const first = await Promise.race([slowP, fastP]);
-    // under the old single global lock, fast would queue behind slow
+    // with a single global lock, fast would queue behind slow
     expect(first.sub).toBe('fast');
     const [slow] = await Promise.all([slowP]);
     expect(JSON.parse(slow.r.text).result.content[0].text).toBe('SLOW');
@@ -722,7 +722,7 @@ async function laneHost(extra: Partial<HttpHostOptions> = {}) {
   return { host, port, open, held, logs, call, admitted };
 }
 
-describe('HttpTransportHost resolveServer refusal (H3 PR1)', () => {
+describe('HttpTransportHost resolveServer refusal', () => {
   async function refusalHost(resolveServer: HttpHostOptions['resolveServer'], log: (l: string) => void = () => {}) {
     const config = { ...resolveHttpConfig({ MCP_TRANSPORT: 'http' }), port: 0 };
     const host = new HttpTransportHost({
@@ -758,9 +758,8 @@ describe('HttpTransportHost resolveServer refusal (H3 PR1)', () => {
       called = true;
       return { content: [{ type: 'text' as const, text: 'x' }] };
     });
-    // red by mutation: a resolveServer whose RETURN carries both 'refused' and
-    // a usable 'server' would prove the refusal path never falls through to
-    // treat any truthy return as a dispatchable target.
+    // Mutation check: a return carrying both 'refused' and a usable 'server' proves refusal
+    // never falls through to treat any truthy return as a dispatchable target.
     const port = await refusalHost(() => ({
       server: marker,
       refused: { error: 'tenant_suspended', message: 'suspended' },
@@ -769,10 +768,8 @@ describe('HttpTransportHost resolveServer refusal (H3 PR1)', () => {
     expect(res.status).toBe(403);
     expect(called).toBe(false);
 
-    // initialize alone never calls a tool on a real dispatched server either,
-    // so the assertion above holds even if dispatch happened; send an actual
-    // tools/call for the marker tool, which WOULD set called=true if the
-    // refusal ever fell through to the resolved server.
+    // initialize alone wouldn't call a tool even if dispatch happened, so send an actual
+    // tools/call: it would set called=true if the refusal ever fell through to the resolved server.
     const callBody = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'tag', arguments: {} } };
     const callRes = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: callBody });
     expect(callRes.status).toBe(403);
@@ -1387,13 +1384,20 @@ describe('HttpTransportHost graceful close', () => {
    * its socket buffer when it ends the connection. */
   // Windows ticks timers at about 15.6 ms and reads smaller chunks, so a slow
   // reader there can need several seconds for 8 MB: the graces below leave room.
+  // One pause listener at a time, removed on stop: a leftover one would pause a
+  // later resume() at its first chunk, and a paused socket never sees the close.
   const readSlowly = (socket: net.Socket) => {
     socket.pause();
+    const pauseOnData = () => socket.pause();
     const every = setInterval(() => {
-      socket.once('data', () => socket.pause());
+      socket.removeListener('data', pauseOnData);
+      socket.once('data', pauseOnData);
       socket.resume();
     }, 5);
-    return () => clearInterval(every);
+    return () => {
+      clearInterval(every);
+      socket.removeListener('data', pauseOnData);
+    };
   };
 
   it('close({ graceMs }) delivers a started big response whole to a slow reader that pipelines a large body after the close began', async () => {
@@ -1426,6 +1430,7 @@ describe('HttpTransportHost graceful close', () => {
     await until(() => conn.received().length > 0, 'the start of the big response');
     await until(() => pending.size === 0, 'the big response to finish writing', 15_000);
     stop();
+    expect(conn.socket.listenerCount('data')).toBe(1);
     conn.socket.pause();
     const closing = h.host.close({ graceMs: 15_000 });
     // Past the 5 s keep-alive timeout plus Node's 1 s buffer, with the tail still unread.

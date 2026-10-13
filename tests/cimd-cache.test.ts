@@ -59,7 +59,7 @@ function harness() {
 const A = 'https://claude.ai/client-a';
 
 describe('CimdClientCache', () => {
-  it('K1 serves a fresh entry with no fetch', async () => {
+  it('serves a fresh entry with no fetch', async () => {
     const h = harness();
     expect(await h.resolve(A)).toEqual({ doc: docFor(A), fresh: true });
     h.advance(CIMD_TTL_MS - 1);
@@ -67,7 +67,7 @@ describe('CimdClientCache', () => {
     expect(h.fetches).toEqual([A]);
   });
 
-  it('K2 refetches once the TTL has passed and a permit is free', async () => {
+  it('refetches once the TTL has passed and a permit is free', async () => {
     const h = harness();
     await h.resolve(A);
     h.advance(CIMD_TTL_MS);
@@ -75,7 +75,7 @@ describe('CimdClientCache', () => {
     expect(h.fetches).toEqual([A, A]);
   });
 
-  it('K3 concurrent requests for one client_id share one fetch and hold no permit of their own', async () => {
+  it('concurrent requests for one client_id share one fetch and hold no permit of their own', async () => {
     const h = harness();
     h.hold();
     const five = Array.from({ length: 5 }, () => h.resolve(A));
@@ -90,7 +90,7 @@ describe('CimdClientCache', () => {
     expect(h.fetches.filter((f) => f === A)).toHaveLength(1);
   });
 
-  it('K4 caps the fetches running at once; a settled one frees its permit', async () => {
+  it('caps the fetches running at once; a settled one frees its permit', async () => {
     const h = harness();
     h.hold();
     const ids = Array.from({ length: CIMD_MAX_IN_FLIGHT + 1 }, (_, i) => `https://claude.ai/id-${i}`);
@@ -105,7 +105,7 @@ describe('CimdClientCache', () => {
     await Promise.all([...running, next]);
   });
 
-  it('K5 while the cap is full, an expired but validated entry is served with no fetch', async () => {
+  it('while the cap is full, an expired but validated entry is served with no fetch', async () => {
     const h = harness();
     await h.resolve(A);
     h.advance(CIMD_TTL_MS + 1);
@@ -114,7 +114,7 @@ describe('CimdClientCache', () => {
     expect(h.fetches.filter((f) => f === A)).toHaveLength(1);
   });
 
-  it('K6 while the cap is full, an entry past the stale limit is not served, and is dropped', async () => {
+  it('while the cap is full, an entry past the stale limit is not served, and is dropped', async () => {
     const h = harness();
     await h.resolve(A);
     h.advance(CIMD_MAX_STALE_MS);
@@ -124,7 +124,7 @@ describe('CimdClientCache', () => {
     expect(h.cache.size).toBe(0);
   });
 
-  it('K7 a refetch failure that says the document went bad drops the entry; one that says nothing about it keeps it and serves it stale', async () => {
+  it('a refetch failure that says the document went bad drops the entry; one that says nothing about it keeps it and serves it stale', async () => {
     const stale: CimdResolution = { doc: docFor(A), fresh: false };
     const blocked: CimdResolution = { error: 'E_CIMD_SSRF_BLOCKED' };
     const invalid: CimdResolution = { error: 'E_CIMD_INVALID' };
@@ -157,7 +157,7 @@ describe('CimdClientCache', () => {
     }
   });
 
-  it('K8 an invalid document is never stored', async () => {
+  it('an invalid document is never stored', async () => {
     const h = harness();
     h.answer = () => Promise.resolve({ client_id: 'https://claude.ai/someone-else', redirect_uris: ['https://x.example/cb'] });
     expect(await h.resolve(A)).toEqual({ error: 'E_CIMD_INVALID' });
@@ -166,7 +166,7 @@ describe('CimdClientCache', () => {
     expect(h.fetches).toEqual([A, A]);
   });
 
-  it('K9 keeps at most CIMD_CACHE_MAX entries, evicting the oldest first', async () => {
+  it('keeps at most CIMD_CACHE_MAX entries, evicting the oldest first', async () => {
     const h = harness();
     const ids = Array.from({ length: CIMD_CACHE_MAX + 1 }, (_, i) => `https://claude.ai/c-${i}`);
     for (const id of ids) await h.resolve(id);
@@ -177,7 +177,7 @@ describe('CimdClientCache', () => {
     expect(h.fetches).toHaveLength(CIMD_CACHE_MAX + 2);
   });
 
-  it('K10 a failing shared fetch logs once, answers every waiter, and leaves no unhandled rejection', async () => {
+  it('a failing shared fetch logs once, answers every waiter, and leaves no unhandled rejection', async () => {
     const unhandled: unknown[] = [];
     const onUnhandled = (e: unknown) => unhandled.push(e);
     process.on('unhandledRejection', onUnhandled);
@@ -198,7 +198,7 @@ describe('CimdClientCache', () => {
     }
   });
 
-  it('K11 the busy line is logged at most once a minute and counts what it held back', async () => {
+  it('the busy line is logged at most once a minute and counts what it held back', async () => {
     const h = harness();
     h.fillCap();
     for (let i = 0; i < 100; i++) expect(await h.resolve(`https://claude.ai/flood-${i}`)).toEqual({ busy: true });
@@ -214,7 +214,7 @@ describe('CimdClientCache', () => {
     expect(h.logs[2]).toBe('CIMD busy: in-flight cap reached (n=1 suppressed)');
   });
 
-  it('K14 after the clock steps back, the next busy line is written at once', async () => {
+  it('after the clock steps back, the next busy line is written at once', async () => {
     const h = harness();
     h.fillCap();
     await h.resolve('https://claude.ai/flood-a');
@@ -223,7 +223,7 @@ describe('CimdClientCache', () => {
     expect(h.logs).toEqual(['CIMD busy: in-flight cap reached', 'CIMD busy: in-flight cap reached']);
   });
 
-  it('K12 every request waiting on a refetch gets the stored document when the issuer cannot answer, and the error when it says the document is gone', async () => {
+  it('every request waiting on a refetch gets the stored document when the issuer cannot answer, and the error when it says the document is gone', async () => {
     const waitOnRefetch = async (failure: unknown, stored: boolean) => {
       const h = harness();
       if (stored) {
@@ -246,7 +246,7 @@ describe('CimdClientCache', () => {
     expect(await waitOnRefetch(new CimdHttpError(503), false)).toEqual({ answers: Array(5).fill({ error: 'E_CIMD_SSRF_BLOCKED' }), size: 0 });
   });
 
-  it('K13 a stale answer keeps the document\'s age: the next request asks the issuer again, and one past the stale limit is not served', async () => {
+  it('a stale answer keeps the document\'s age: the next request asks the issuer again, and one past the stale limit is not served', async () => {
     const h = harness();
     await h.resolve(A);
     h.advance(CIMD_TTL_MS);

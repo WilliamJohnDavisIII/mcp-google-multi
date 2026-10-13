@@ -9,12 +9,8 @@ import { handleGoogleApiError, invalidParams } from './_errors.js';
 import { capText } from '../trim.js';
 
 
-// A single very large insertText has been observed to apply only partially while
-// the request still returns success, silently dropping the tail. Split a large
-// insert into bounded pieces sent as sequential insertText requests in one atomic
-// batchUpdate: small inserts keep the exact single-request path, and a large one
-// can no longer be silently truncated. Docs indices are UTF-16 code units (= JS
-// string length), so index math advances by `.length`; never split a surrogate pair.
+// A single large insertText can silently apply only partially despite returning
+// success; split into <=DOCS_INSERT_CHUNK sequential inserts in one atomic batchUpdate (UTF-16-safe, no split surrogate pairs).
 export const DOCS_INSERT_CHUNK = 5000;
 
 export function splitInsertText(text: string, maxLen = DOCS_INSERT_CHUNK): string[] {
@@ -178,9 +174,8 @@ export function listTabs(tabs: any[] | undefined): { tabId: string; title: strin
 }
 
 export function registerDocsTools(server: ToolRegistry, deps: CuratedToolDeps = {}): void {
-  // Per-registry, LIVE account enum + injectable client (S1.10): the
-  // schema follows the registry's account view at parse time, and the
-  // custody path is the context's, not the process global.
+  // Per-registry, live account enum + injectable client: the schema follows
+  // the registry's account view at parse time, not a process-global default.
   const accountEnum = accountArgLive(() => server.accountAliases()).optional();
   const getClientFn = deps.getClientFn ?? getClient;
   server.registerTool(
