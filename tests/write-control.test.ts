@@ -72,6 +72,27 @@ describe('isAllowed', () => {
     expect(isAllowed(tool('drive_update', 'update'), safe)).toBe(true);
     expect(isAllowed(tool('drive_delete', 'delete'), safe)).toBe(false);
   });
+  it('safe-writes allows the three Trash moves, by name, despite their delete cud', () => {
+    expect(isAllowed(tool('gmail_trash', 'delete'), safe)).toBe(true);
+    expect(isAllowed(tool('drive_trash', 'delete'), safe)).toBe(true);
+    expect(isAllowed(tool('gmail_users_threads_trash', 'delete'), safe)).toBe(true);
+  });
+  it('safe-writes still denies every permanent delete, Trash included', () => {
+    expect(isAllowed(tool('gmail_delete', 'delete'), safe)).toBe(false);
+    expect(isAllowed(tool('gmail_batch_delete', 'delete'), safe)).toBe(false);
+    expect(isAllowed(tool('drive_empty_trash', 'delete'), safe)).toBe(false);
+    expect(isAllowed(tool('tasks_delete', 'delete'), safe)).toBe(false);
+    expect(isAllowed(tool('gmail_users_threads_delete', 'delete'), safe)).toBe(false);
+  });
+  it('the Trash exception is matched by name, not by a bare delete+"trash" shape', () => {
+    // drive_transfer's move flag self-checks a synthetic delete-cud ref named
+    // drive_transfer_move; it must stay refused under safe-writes.
+    expect(isAllowed({ name: 'drive_transfer_move', service: 'drive', cud: 'delete' }, safe)).toBe(false);
+  });
+  it('read-only still refuses the Trash moves', () => {
+    expect(isAllowed(tool('gmail_trash', 'delete'), ro)).toBe(false);
+    expect(isAllowed(tool('drive_trash', 'delete'), ro)).toBe(false);
+  });
   it('full-writes allows everything', () => {
     expect(isAllowed(tool('drive_delete', 'delete'), full)).toBe(true);
   });
