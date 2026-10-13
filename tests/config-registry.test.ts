@@ -263,6 +263,17 @@ describe('fs-atomic', () => {
     utimesSync(lock, new Date(o.mtimeMs), new Date(o.mtimeMs));
     return lock;
   };
+  // A fallback holder's lock: no hard link, the owner file instead records
+  // the lock's dev/ino/mtimeNs once bound.
+  const plantFallbackLock = (p: string, o: { pid: number; id: Identity; mtimeMs: number }) => {
+    const lock = lockOf(p);
+    writeFileSync(lock, String(o.pid), { mode: 0o600 });
+    utimesSync(lock, new Date(o.mtimeMs), new Date(o.mtimeMs));
+    const st = fs.lstatSync(lock, { bigint: true });
+    const owner = `${lock}.${o.pid}.${o.id.ns}.${o.id.start}.${o.id.boot}.${'ab'.repeat(6)}.owner`;
+    writeFileSync(owner, `${st.dev}:${st.ino}:${st.mtimeNs}`);
+    return lock;
+  };
   // Each Date.now() call advances 6 s: the 5 s timeout fires on the first
   // wait, while the lock's age is still measured against the clock.
   const fastClock = (from = Date.now()) => {
@@ -679,6 +690,45 @@ describe('fs-atomic', () => {
       let thirdRan = false;
       expect(() => withFileLock(p, () => void (thirdRan = true))).toThrow(/Timed out waiting/);
       expect(thirdRan).toBe(false);
+    });
+
+    it('a fresh fallback lock of a live holder in another PID namespace is kept, like the linked control', () => {
+      denyLink('EACCES');
+      const p = path.join(base, 'f.json');
+      // A pid absent here: only recognizing the owner file keeps this from
+      // being probed (and wrongly declared dead) in our own namespace.
+      const pid = absentPid();
+      const lock = plantFallbackLock(p, { pid, id: { ...SELF_ID, ns: OTHER_NS }, mtimeMs: Date.now() - 30_000 });
+      expectKept(p, lock, pid);
+    });
+
+    it('a stale fallback lock from another PID namespace is still broken after the lease', () => {
+      denyLink('EACCES');
+      const p = path.join(base, 'f.json');
+      plantFallbackLock(p, { pid: process.ppid, id: { ...SELF_ID, ns: OTHER_NS }, mtimeMs: Date.now() - 61_000 });
+      expectBroken(p);
+    });
+
+    it('an unbound fallback lock, mid-creation, counts as held like an empty one, even from another namespace', () => {
+      const p = path.join(base, 'f.json');
+      const pid = absentPid();
+      const lock = lockOf(p);
+      // The pid is written but the owner file has not yet been rewritten with
+      // the binding record: the window between the two fallback-lock writes.
+      writeFileSync(lock, String(pid), { mode: 0o600 });
+      writeFileSync(`${lock}.${pid}.${OTHER_NS}.1.${OTHER_BOOT}.${'ab'.repeat(6)}.owner`, String(pid));
+      const at = Date.now();
+      let call = 0;
+      vi.spyOn(Date, 'now').mockImplementation(() => {
+        call += 1;
+        if (call === 1) return at;
+        if (call === 2) return at + 100;
+        return at + 10_000;
+      });
+      let ran = false;
+      expect(() => withFileLock(p, () => void (ran = true))).toThrow(/Timed out waiting/);
+      expect(ran).toBe(false);
+      expect(existsSync(lock)).toBe(true);
     });
   });
 });

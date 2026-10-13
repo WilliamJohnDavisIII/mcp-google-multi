@@ -79,8 +79,10 @@ interface LockHolder extends FileId {
   body: string;
   mtimeNs: bigint;
   mtimeMs: number;
-  /** The holder's owner file, still linked to the lock; absent for an older writer. */
+  /** The holder's owner file, linked to the lock or bound to it by a recorded identity; absent for an older writer. */
   owner?: LockIdentity & { path: string };
+  /** A same-pid owner file exists but its binding does not (yet) match this lock. See docs/internals.md. */
+  ownerPending?: boolean;
 }
 
 function sameFile(a: FileId, b: FileId): boolean {
@@ -91,11 +93,21 @@ function isEnoent(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
+function bindingRecord(id: LockAcquisition): string {
+  return `${id.dev}:${id.ino}:${id.mtimeNs}`;
+}
+
+function matchesBinding(content: string, id: LockAcquisition): boolean {
+  const m = /^(\d+):(\d+):(\d+)$/.exec(content);
+  return m !== null && BigInt(m[1]) === id.dev && BigInt(m[2]) === id.ino && BigInt(m[3]) === id.mtimeNs;
+}
+
 // Undefined when the lock changed hands while it was being read.
 function readHolder(lock: string): LockHolder | undefined {
   const before = fs.lstatSync(lock, { bigint: true });
   const body = before.isFile() ? fs.readFileSync(lock, 'utf8') : '';
   let owner: LockHolder['owner'];
+  let ownerPending = false;
   if (before.isFile()) {
     const dir = path.dirname(lock);
     const prefix = `${path.basename(lock)}.`;
@@ -105,10 +117,12 @@ function readHolder(lock: string): LockHolder | undefined {
       if (!m || m[1] !== body) continue;
       const ownerPath = path.join(dir, name);
       try {
-        if (sameFile(fs.lstatSync(ownerPath, { bigint: true }), before)) {
+        const ownerStat = fs.lstatSync(ownerPath, { bigint: true });
+        if (sameFile(ownerStat, before) || matchesBinding(fs.readFileSync(ownerPath, 'utf8'), before)) {
           owner = { path: ownerPath, ns: m[2], start: m[3], boot: m[4] };
           break;
         }
+        ownerPending = true;
       } catch (error) {
         if (!isEnoent(error)) throw error;
       }
@@ -116,7 +130,7 @@ function readHolder(lock: string): LockHolder | undefined {
   }
   const after = fs.lstatSync(lock, { bigint: true });
   if (!sameFile(before, after)) return undefined;
-  return { body, ino: after.ino, dev: after.dev, mtimeNs: after.mtimeNs, mtimeMs: Number(after.mtimeNs) / 1e6, owner };
+  return { body, ino: after.ino, dev: after.dev, mtimeNs: after.mtimeNs, mtimeMs: Number(after.mtimeNs) / 1e6, owner, ownerPending };
 }
 
 // The owner file's random name tells two holders apart even when the second
@@ -142,6 +156,9 @@ function holderDead(holder: LockHolder, now: number): boolean {
   if (holder.body === '' && now - holder.mtimeMs < LOCK_WRITE_GRACE_MS) return false;
   const pid = Number(holder.body);
   if (!(Number.isSafeInteger(pid) && pid > 0)) return true;
+  // A same-pid owner file exists but is not yet bound (the fallback lock's two
+  // writes race a reader); give it the same grace as an empty lock.
+  if (!holder.owner && holder.ownerPending && now - holder.mtimeMs < LOCK_WRITE_GRACE_MS) return false;
   const leaseOver = now - holder.mtimeMs >= LOCK_LEASE_MS;
   const owner = holder.owner;
   // No owner file: an older writer, whose namespace is unknown.
@@ -210,6 +227,20 @@ function releaseBreaker(breaker: string, token: string): void {
 /** The lock's own identity at the moment this call created it. */
 type LockAcquisition = FileId & { mtimeNs: bigint };
 
+// No hard links here (Android/Termux denies link() in private storage, some
+// filesystems lack it entirely): the lock is created directly with O_EXCL,
+// carrying the bare pid a linked owner file would carry, and the owner file
+// is bound to it by a recorded identity instead of a hard link. See docs/internals.md.
+function takeFallbackLock(lock: string, ownerFile: string): LockAcquisition {
+  const fd = fs.openSync(lock, 'wx', 0o600);
+  fs.writeSync(fd, String(process.pid));
+  const stat = fs.fstatSync(fd, { bigint: true });
+  fs.closeSync(fd);
+  const acquired: LockAcquisition = { dev: stat.dev, ino: stat.ino, mtimeNs: stat.mtimeNs };
+  fs.writeFileSync(ownerFile, bindingRecord(acquired));
+  return acquired;
+}
+
 // Hardlink-based advisory lock; the lock body is the bare pid, as older
 // readers expect. See docs/internals.md.
 export function withFileLock<T>(absPath: string, fn: () => T, label = `lock: ${absPath}`): T {
@@ -232,16 +263,12 @@ export function withFileLock<T>(absPath: string, fn: () => T, label = `lock: ${a
       } catch (error) {
         const err = error as NodeJS.ErrnoException;
         if (err.code === 'EACCES' || err.code === 'EPERM') {
-          // link() is denied in some private storage (Android/Termux) and on
-          // filesystems without hard links; fall back to the lock carrying
-          // the pid directly. See docs/internals.md.
           try {
-            fs.writeFileSync(lock, String(process.pid), { mode: 0o600, flag: 'wx' });
+            acquired = takeFallbackLock(lock, ownerFile);
             linked = true;
-            acquired = fs.lstatSync(lock, { bigint: true });
             break;
-          } catch (writeError) {
-            if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError;
+          } catch (fbError) {
+            if ((fbError as NodeJS.ErrnoException).code !== 'EEXIST') throw fbError;
           }
         } else if (err.code !== 'EEXIST') {
           throw error;
