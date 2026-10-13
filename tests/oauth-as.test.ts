@@ -1528,6 +1528,76 @@ describe('alias_add flow + resolveSubject seam (S1.14)', () => {
     expect(seen).toEqual([['member@x.example', { sub: undefined, hd: undefined }]]);
   });
 
+  // H3 PR1: a resolveSubject denial may explain itself; null keeps today's
+  // bare redirect exactly.
+  describe('resolveSubject denial (H3)', () => {
+    it('a denial with a description adds error_description to the access_denied redirect', async () => {
+      const { port } = await startMt({}, {
+        resolveSubject: () => ({ denied: { description: 'This workspace is suspended by its operator.' } }),
+      });
+      const cb = await ownerGateCallback(port);
+      const loc = new URL(cb.headers.location as string);
+      expect(loc.searchParams.get('error')).toBe('access_denied');
+      expect(loc.searchParams.get('error_description')).toBe('This workspace is suspended by its operator.');
+      expect(loc.searchParams.get('code')).toBeNull();
+    });
+
+    it('an out-of-charset description (control character) is dropped, not forwarded unvalidated', async () => {
+      const { port } = await startMt({}, {
+        resolveSubject: () => ({ denied: { description: 'line one\nline two' } }),
+      });
+      const cb = await ownerGateCallback(port);
+      const loc = new URL(cb.headers.location as string);
+      expect(loc.searchParams.get('error')).toBe('access_denied');
+      expect(loc.searchParams.get('error_description')).toBeNull();
+    });
+
+    it('a description containing a double quote is dropped (red by mutation: widening the charset to \\x20-\\x7e)', async () => {
+      const { port } = await startMt({}, {
+        resolveSubject: () => ({ denied: { description: 'say "no"' } }),
+      });
+      const cb = await ownerGateCallback(port);
+      const loc = new URL(cb.headers.location as string);
+      expect(loc.searchParams.get('error')).toBe('access_denied');
+      expect(loc.searchParams.get('error_description')).toBeNull();
+    });
+
+    it('a description containing a backslash is dropped (red by mutation: widening the charset to \\x20-\\x7e)', async () => {
+      const { port } = await startMt({}, {
+        resolveSubject: () => ({ denied: { description: 'back\\slash' } }),
+      });
+      const cb = await ownerGateCallback(port);
+      const loc = new URL(cb.headers.location as string);
+      expect(loc.searchParams.get('error')).toBe('access_denied');
+      expect(loc.searchParams.get('error_description')).toBeNull();
+    });
+
+    it('an overlong description (past 200 chars) is dropped', async () => {
+      const { port } = await startMt({}, {
+        resolveSubject: () => ({ denied: { description: 'x'.repeat(201) } }),
+      });
+      const cb = await ownerGateCallback(port);
+      const loc = new URL(cb.headers.location as string);
+      expect(loc.searchParams.get('error_description')).toBeNull();
+    });
+
+    it('null is today\'s exact redirect: no error_description key at all', async () => {
+      const { port } = await startMt({}, { resolveSubject: () => null });
+      const cb = await ownerGateCallback(port);
+      expect(cb.headers.location).not.toContain('error_description');
+    });
+
+    it('a denial redirect carries no code: no authorization code is minted for a denied subject', async () => {
+      const { port } = await startMt({}, {
+        resolveSubject: () => ({ denied: { description: 'suspended' } }),
+      });
+      const cb = await ownerGateCallback(port);
+      const loc = new URL(cb.headers.location as string);
+      expect(loc.searchParams.has('code')).toBe(false);
+      expect(loc.searchParams.get('error')).toBe('access_denied');
+    });
+  });
+
   it('alias_add hands bindTenantAlias the verified sub', async () => {
     const { port, as } = await startMt({}, {
       exchangeCode: async () => ({ tokens: { refresh_token: 'g-rt' }, email: 'member@x.example', sub: '1234', hd: 'x.example' }),

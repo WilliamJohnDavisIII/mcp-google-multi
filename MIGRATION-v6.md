@@ -333,9 +333,9 @@ declared explicitly (`mcp-google-multi/identity`, `/compose`, `/registry`,
 `/oauth-as`, `/accounts`, `/token-store`, `/http-transport`, `/http-config`,
 `/client`, `/config-file`, `/fs-atomic`, `/master-key`, `/mcp-token`,
 `/boot-gates`, `/tenant-purge`, `/doctor`, `/write-control`,
-`/scope-catalog`, `/auth`, `/usage-metrics`, `/metrics-tap`). Any OTHER deep
-import into `dist/` (previously unrestricted, e.g.
-`mcp-google-multi/dist/trim.js`) now fails with
+`/scope-catalog`, `/auth`, `/usage-metrics`, `/metrics-tap`,
+`/hint-provider`). Any OTHER deep import into `dist/` (previously
+unrestricted, e.g. `mcp-google-multi/dist/trim.js`) now fails with
 `ERR_PACKAGE_PATH_NOT_EXPORTED`. The CLI (`npx mcp-google-multi ...`) and the
 MCP server entry are unaffected. If you relied on an undeclared deep import,
 open an issue naming the module so it can be promoted to a declared entry.
@@ -350,6 +350,31 @@ set, unioned with `KNOWN_ERROR_SLUGS` for that instance, each entry matching
 also keeps `mid` off the next event: an escape-hatch method resolved during
 one `google_api_call` no longer attaches to whichever `google_api_call`
 records next, which on a shared instance could belong to a different caller.
+
+`/hint-provider` is a new declared entry: a host serving more than one
+identity over one process (a single owner never needs this) can install one
+process-global `HintProvider` with `setHintProvider(provider)`, exported
+alongside `hints()`, the `HintCase` discriminated union and the `HINT_KINDS`
+tuple. With no provider installed every remediation hint in the server is
+byte-identical to today's; a provider's `render(c: HintCase)` returns
+`{ hint, message?, retriable? }` for whichever case fired (a dead token, a
+scope gap, a write refusal, an operator-only condition, and so on), letting a
+multi-tenant host reword every operator-facing hint (an env var, a CLI
+command, a config path) into something its own tenants can act on.
+`ServiceHints` (passed to `handleGoogleApiError` by Forms, Slides, Chat,
+Analytics and Admin) gains an optional `bundle` naming the scope bundle a
+403 is about; a bare-string `ServiceHints` keeps its old meaning (the scope
+hint) and carries no bundle. `HttpHostOptions.resolveServer` may now also
+return `{ refused: { error, message } }` to answer a verified subject with a
+host-chosen 403 body instead of the generic `tenant_not_found`;
+`AuthServerDeps.resolveSubject` may now also return
+`{ denied: { description } }` to add an `error_description` to the
+`access_denied` sign-in redirect. Neither seam introduces a new slug into
+core itself. **Adding a member to `HintCase` is a breaking change for any
+provider written as an exhaustive switch (a multi-tenant host's typically
+is): such a provider fails to typecheck against a newer core until it
+handles the new case, so it ships behind a minor pin bump, never a silent
+repin.**
 
 `buildRegistry(server, ctx)` resolves every registered tool through `ctx`:
 the client, token reads, account emails (the From header, `drive_transfer`'s

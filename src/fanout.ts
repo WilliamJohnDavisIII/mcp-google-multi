@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getAccountSet, liveAccountCheck, unknownAliasMessage } from './accounts.js';
 import { echoName, echoNames, MAX_SUGGESTED_KEYS } from './arg-strict.js';
+import { hints } from './hint-provider.js';
 
 export const CSV_RE = /^[a-zA-Z0-9_-]+(\s*,\s*[a-zA-Z0-9_-]+)+$/;
 
@@ -135,10 +136,17 @@ export async function runFanout(
         const payload = parsePayload(res);
         results[i] = res?.isError ? { account, ok: false, error: payload } : { account, ok: true, data: payload };
       } catch (err) {
+        const rendered = hints()?.render({ kind: 'internal', account });
         results[i] = {
           account,
           ok: false,
-          error: { error: 'internal', message: (err as Error).message, retriable: false, account },
+          error: {
+            error: 'internal',
+            message: rendered?.message ?? (err as Error).message,
+            hint: rendered?.hint,
+            retriable: false,
+            account,
+          },
         };
       }
     }

@@ -722,6 +722,112 @@ async function laneHost(extra: Partial<HttpHostOptions> = {}) {
   return { host, port, open, held, logs, call, admitted };
 }
 
+describe('HttpTransportHost resolveServer refusal (H3 PR1)', () => {
+  async function refusalHost(resolveServer: HttpHostOptions['resolveServer'], log: (l: string) => void = () => {}) {
+    const config = { ...resolveHttpConfig({ MCP_TRANSPORT: 'http' }), port: 0 };
+    const host = new HttpTransportHost({
+      server: makeServer(),
+      config,
+      version: '9.9.9',
+      ownerConfigured: true,
+      authenticate: (req) => ({ ok: true, sub: String(req.headers['x-test-sub'] ?? '') }),
+      resolveServer,
+      log,
+    });
+    await host.start();
+    hosts.push(host);
+    return host.address()!.port;
+  }
+
+  it('a valid refusal answers 403 with its own slug and message, logging only the slug', async () => {
+    const logs: string[] = [];
+    const port = await refusalHost(
+      () => ({ refused: { error: 'tenant_suspended', message: 'This workspace is suspended by its operator.' } }),
+      (l) => logs.push(l),
+    );
+    const res = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: initBody });
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.text)).toEqual({ error: 'tenant_suspended', message: 'This workspace is suspended by its operator.' });
+    expect(logs.some((l) => l.includes('403 tenant_suspended path=/mcp'))).toBe(true);
+  });
+
+  it('a refusal never reaches dispatch: the resolved target server is never the one that answers', async () => {
+    const marker = new McpServer({ name: 'never-dispatched', version: '0.0.0' });
+    let called = false;
+    marker.registerTool('tag', { description: 'x', inputSchema: z.object({}) }, async () => {
+      called = true;
+      return { content: [{ type: 'text' as const, text: 'x' }] };
+    });
+    // red by mutation: a resolveServer whose RETURN carries both 'refused' and
+    // a usable 'server' would prove the refusal path never falls through to
+    // treat any truthy return as a dispatchable target.
+    const port = await refusalHost(() => ({
+      server: marker,
+      refused: { error: 'tenant_suspended', message: 'suspended' },
+    }) as never);
+    const res = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: initBody });
+    expect(res.status).toBe(403);
+    expect(called).toBe(false);
+
+    // initialize alone never calls a tool on a real dispatched server either,
+    // so the assertion above holds even if dispatch happened; send an actual
+    // tools/call for the marker tool, which WOULD set called=true if the
+    // refusal ever fell through to the resolved server.
+    const callBody = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'tag', arguments: {} } };
+    const callRes = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: callBody });
+    expect(callRes.status).toBe(403);
+    expect(called).toBe(false);
+  });
+
+  it('an invalid slug falls back to today\'s exact tenant_not_found body', async () => {
+    const port = await refusalHost(() => ({ refused: { error: 'Not-Valid!', message: 'ok message' } }));
+    const res = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: initBody });
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.text)).toEqual({ error: 'tenant_not_found', message: 'no tenant is provisioned for this subject' });
+  });
+
+  it('an overlong message falls back to tenant_not_found', async () => {
+    const port = await refusalHost(() => ({ refused: { error: 'tenant_unavailable', message: 'x'.repeat(301) } }));
+    const res = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: initBody });
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.text).error).toBe('tenant_not_found');
+  });
+
+  it('a non-printable message falls back to tenant_not_found', async () => {
+    const port = await refusalHost(() => ({ refused: { error: 'tenant_unavailable', message: 'bad\nmessage' } }));
+    const res = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: initBody });
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.text).error).toBe('tenant_not_found');
+  });
+
+  it('a non-string slug, a C1 control, U+2028 and U+202E each fall back to tenant_not_found (red by mutation: the old \\x00-\\x1f\\x7f-only regex)', async () => {
+    const refusals: unknown[] = [
+      { refused: { error: 42, message: 'ok message' } },
+      { refused: { error: 'tenant_unavailable', message: `bad${String.fromCharCode(0x85)}message` } },
+      { refused: { error: 'tenant_unavailable', message: 'bad message' } },
+      { refused: { error: 'tenant_unavailable', message: 'bad‮message' } },
+    ];
+    for (const refusal of refusals) {
+      const port = await refusalHost(() => refusal as never);
+      const res = await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: initBody });
+      expect(res.status).toBe(403);
+      expect(JSON.parse(res.text)).toEqual({ error: 'tenant_not_found', message: 'no tenant is provisioned for this subject' });
+    }
+  });
+
+  it('null and a throw both keep today\'s exact tenant_not_found body', async () => {
+    const nullPort = await refusalHost(() => null);
+    const nullRes = await request(nullPort, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: initBody });
+    expect(nullRes.status).toBe(403);
+    expect(JSON.parse(nullRes.text)).toEqual({ error: 'tenant_not_found', message: 'no tenant is provisioned for this subject' });
+
+    const throwPort = await refusalHost(() => { throw new Error('boom'); });
+    const throwRes = await request(throwPort, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT, 'x-test-sub': 'x' }, body: initBody });
+    expect(throwRes.status).toBe(403);
+    expect(JSON.parse(throwRes.text)).toEqual({ error: 'tenant_not_found', message: 'no tenant is provisioned for this subject' });
+  });
+});
+
 describe('HttpTransportHost lane bounds', () => {
   it('maxQueuedPerLane: a full lane answers 429 lane_busy while another server still completes', async () => {
     const h = await laneHost({ maxQueuedPerLane: 2 });

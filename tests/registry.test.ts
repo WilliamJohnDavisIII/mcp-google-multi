@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { z } from 'zod';
 import { inferCud, ToolRegistry } from '../src/registry.js';
+import { setHintProvider } from '../src/hint-provider.js';
 import type { Policy } from '../src/write-control.js';
 
 describe('inferCud', () => {
@@ -74,6 +75,8 @@ function fakeServer() {
 }
 
 describe('ToolRegistry', () => {
+  afterEach(() => setHintProvider(null));
+
   it('records the tool entry and forwards to the server', () => {
     const { server, registered } = fakeServer();
     const reg = new ToolRegistry(server as never, FULL_WRITES);
@@ -308,6 +311,26 @@ describe('ToolRegistry', () => {
       }));
       expect(JSON.parse(out.content[0].text).error, label).toBe(expected);
     }
+  });
+
+  it('a throwing hint provider never breaks a registry-wrapped write-denied call (red by mutation: drop the catch in hints())', async () => {
+    const policy: Policy = { profile: 'read-only', readOnly: true, allow: [], deny: [] };
+    const { server, registered } = fakeServer();
+    const reg = new ToolRegistry(server as never, policy);
+    reg.registerTool('gmail_send', { description: 'x', inputSchema: { to: z.string() } }, () => ({
+      content: [{ type: 'text' as const, text: '{}' }],
+    }));
+    setHintProvider({
+      render: () => {
+        throw new Error('provider blew up');
+      },
+    });
+    const handler = registered[0].handler as (...a: unknown[]) => Promise<{ content: { text: string }[] }>;
+    const out = await handler({ to: 'x' });
+    const body = JSON.parse(out.content[0].text);
+    expect(body.error).toBe('write_disabled');
+    expect(body.message).not.toContain('provider blew up');
+    expect(body.message).toContain('"gmail_send"');
   });
 
   it('installListHandler throws when nothing is registered', () => {

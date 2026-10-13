@@ -5,6 +5,7 @@ import { getAccountSet, refreshAccountSetIfStale, type AccountSet } from '../acc
 import { buildScopesReport, type ScopesReport } from '../scope-observability.js';
 import { getAdminAccounts, resolveScopesForAccount } from '../auth.js';
 import { hasToken, readToken, type TokenStore } from '../token-store.js';
+import { hints } from '../hint-provider.js';
 
 export interface AccountHealthDeps {
   hasToken: (alias: string) => boolean;
@@ -70,13 +71,18 @@ export function deriveAccountHealth(alias: string, deps: AccountHealthDeps = DEF
 
   if (!deps.hasToken(alias)) {
     const legacy = deps.fileExists(config.tokenPath);
+    const rendered = legacy
+      ? hints()?.render({ kind: 'legacy_plaintext_token', account: alias })
+      : hints()?.render({ kind: 'reauth', account: alias });
     return {
       ...base,
       token: {
         status: 'missing',
-        hint: legacy
-          ? 'Plaintext token.json found — run: npx mcp-google-multi migrate-tokens'
-          : reauthHint(alias),
+        hint:
+          rendered?.hint ??
+          (legacy
+            ? 'Plaintext token.json found — run: npx mcp-google-multi migrate-tokens'
+            : reauthHint(alias)),
       },
       scopes: noScopes,
     };
@@ -86,9 +92,10 @@ export function deriveAccountHealth(alias: string, deps: AccountHealthDeps = DEF
   try {
     token = deps.readToken(alias);
   } catch {
+    const rendered = hints()?.render({ kind: 'token_unreadable', account: alias });
     return {
       ...base,
-      token: { status: 'decrypt_error', hint: 'Wrong MASTER_KEY or corrupt token file — re-auth or restore the key.' },
+      token: { status: 'decrypt_error', hint: rendered?.hint ?? 'Wrong MASTER_KEY or corrupt token file — re-auth or restore the key.' },
       scopes: noScopes,
     };
   }
@@ -111,9 +118,9 @@ export function deriveAccountHealth(alias: string, deps: AccountHealthDeps = DEF
       expiryDate: expiry !== undefined ? new Date(expiry).toISOString() : undefined,
       hint:
         status === 'needs_reauth'
-          ? reauthHint(alias)
+          ? (hints()?.render({ kind: 'reauth', account: alias })?.hint ?? reauthHint(alias))
           : missing.length > 0
-            ? 'Re-auth to grant the missing scopes'
+            ? (hints()?.render({ kind: 'scopes_missing', account: alias })?.hint ?? 'Re-auth to grant the missing scopes')
             : undefined,
     },
     scopes: report,

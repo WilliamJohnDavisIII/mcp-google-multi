@@ -94,6 +94,12 @@ export interface GoogleIdentity {
 const OIDC_SUB = /^[\x21-\x7e]{1,255}$/;
 const HOSTED_DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
 
+// RFC 6749's error_description charset: %x20-21 / %x23-5B / %x5D-7E (printable
+// ASCII minus the backslash and double-quote that would need escaping in the
+// query string). A resolveSubject denial outside this set is dropped rather
+// than forwarded unvalidated (H3 PR1).
+const ERROR_DESCRIPTION_RE = /^[\x20-\x21\x23-\x5b\x5d-\x7e]{1,200}$/;
+
 /** Only trust the id_token identity when Google marks the email verified (#8).
  * The token comes straight from Google's token endpoint, so its claims are
  * read unsigned. A malformed sub or hd is dropped, never passed on. */
@@ -147,7 +153,10 @@ export interface AuthServerDeps {
    * `identity` carries Google's `sub` and `hd` when the exchange returned
    * them, so a resolver can key on the stable account id rather than an
    * address that can be reassigned. */
-  resolveSubject?: (email: string, identity?: { sub?: string; hd?: string }) => { sub: string } | null;
+  resolveSubject?: (
+    email: string,
+    identity?: { sub?: string; hd?: string },
+  ) => { sub: string } | null | { denied: { description: string } };
   /** alias_add completion: persist the new alias's config row and tokens under
    * its tenant. /callback awaits it only after a successful Google exchange.
    * A returned refusal answers 403 with its slug; a throw or rejection answers
@@ -697,12 +706,15 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
     // signed into the authz code and flows into every token minted from it.
     const email = (exchanged.email ?? '').toLowerCase();
     const iss = encodeURIComponent(base);
-    const subject = email ? resolveSubject(email, { sub: exchanged.sub, hd: exchanged.hd }) : null;
-    if (!subject) {
+    const resolved = email ? resolveSubject(email, { sub: exchanged.sub, hd: exchanged.hd }) : null;
+    if (!resolved || 'denied' in resolved) {
       const sep = st.redirect_uri.includes('?') ? '&' : '?';
       const s = st.client_state ? `&state=${encodeURIComponent(st.client_state)}` : '';
-      return redirect(res, `${st.redirect_uri}${sep}error=access_denied${s}&iss=${iss}`);
+      const desc = resolved && 'denied' in resolved ? resolved.denied.description : undefined;
+      const d = desc !== undefined && ERROR_DESCRIPTION_RE.test(desc) ? `&error_description=${encodeURIComponent(desc)}` : '';
+      return redirect(res, `${st.redirect_uri}${sep}error=access_denied${d}${s}&iss=${iss}`);
     }
+    const subject = resolved;
     const authzCode = await signAuthzCode(
       { redirect_uri: st.redirect_uri, code_challenge: st.code_challenge, resource: st.resource, sub: subject.sub },
       base,
