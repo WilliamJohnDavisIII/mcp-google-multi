@@ -527,6 +527,29 @@ describe('fs-atomic', () => {
     expect(droppings(p)).toEqual([path.basename(lockOf(p))]);
   });
 
+  // releaseLock only removes the lock when BOTH its recorded identity still
+  // matches AND our owner file still exists; each of the next two tests
+  // drops just one of those and leaves the other true.
+  it('release keeps the lock when our owner file is gone, even though the lock itself is unchanged', () => {
+    const p = path.join(base, 'a.json');
+    withFileLock(p, () => {
+      for (const n of droppings(p).filter((f) => f.endsWith('.owner'))) rmSync(path.join(base, n));
+    });
+    expect(readFileSync(lockOf(p), 'utf8')).toBe(String(process.pid));
+    expect(droppings(p)).toEqual([path.basename(lockOf(p))]);
+  });
+
+  it('release keeps the lock when it no longer matches our recorded identity, even though our owner file still exists', () => {
+    const p = path.join(base, 'a.json');
+    withFileLock(p, () => {
+      const lock = lockOf(p);
+      rmSync(lock);
+      writeFileSync(lock, '4242', { mode: 0o600 });
+    });
+    expect(readFileSync(lockOf(p), 'utf8')).toBe('4242');
+    expect(droppings(p)).toEqual([path.basename(lockOf(p))]);
+  });
+
   it('on a filesystem that gives each name of a file its own inode number, the lock is still released', () => {
     const realLstat = fs.lstatSync.bind(fs);
     vi.spyOn(fs, 'lstatSync').mockImplementation(((target: string, options?: { bigint?: boolean }) => {
