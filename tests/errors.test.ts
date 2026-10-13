@@ -66,7 +66,7 @@ describe('mapGoogleError', () => {
     expect(scoped.hint).not.toBe('share the file first');
   });
 
-  // B10 noob-proofing hints
+  // noob-proofing hints
   it('403 accessNotConfigured → api_not_enabled with the per-API enable link', () => {
     const e = mapGoogleError({
       code: 403,
@@ -398,10 +398,10 @@ describe('local preconditions are not Google failures', () => {
   });
 });
 
-// H3 PR1: with no provider every case above is unchanged (case A, proven by
+// With no provider every case above is unchanged (case A, proven by
 // the untouched assertions above). Case B: a stub provider routes and sees
 // the right facts, for every call site this file can reach.
-describe('hint provider routing (H3)', () => {
+describe('hint provider routing', () => {
   it('401 auth_required renders kind reauth with the account', () => {
     const seen = echoProvider();
     const e = mapGoogleError({ code: 401, message: 'Invalid Credentials' }, acc);

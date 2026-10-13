@@ -54,7 +54,7 @@ describe('token-store crypto', () => {
     expect(() => decryptToken(JSON.stringify(o), KEY)).toThrow();
   });
 
-  describe('tenant-keyed v2 files (S1.6, HKDF)', () => {
+  describe('tenant-keyed v2 files (HKDF)', () => {
     it('tenantId omitted writes v1 byte-compatible files (single-owner default unchanged)', () => {
       const o = JSON.parse(encryptToken(sample, KEY));
       expect(o.v).toBe(1);
@@ -87,7 +87,7 @@ describe('token-store crypto', () => {
     });
   });
 
-  describe('tenant paths (S1.6, OQ-B every-level 0700)', () => {
+  describe('tenant paths (every-level 0700)', () => {
     afterEach(() => fs.rmSync(tenantsDir(), { recursive: true, force: true }));
 
     it('helpers produce configDir()/tenants/<id>/{config.json,tokens}', () => {
@@ -293,7 +293,7 @@ describe('token-store crypto', () => {
     expect(readToken('test')).toEqual({ ...sample, access_token: 'new', expiry_date: 456 });
   });
 
-  it('updateToken never recreates a token file that was never written, or one removed out from under it (R3)', () => {
+  it('updateToken never recreates a token file that was never written, or one removed out from under it', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'token-store-'));
     cleanupDirs.push(dir);
     ACCOUNT_CONFIG.test.encPath = path.join(dir, 'test.enc');

@@ -58,7 +58,7 @@ function ctxHarness(aliases: string[]) {
   return { registry, captured };
 }
 
-describe('generated registration threads the registry context (S1.9)', () => {
+describe('generated registration threads the registry context', () => {
   it('two registries, disjoint aliases: each generated account enum accepts ONLY its own set', () => {
     const a = ctxHarness(['a1', 'a2']);
     const b = ctxHarness(['b1']);

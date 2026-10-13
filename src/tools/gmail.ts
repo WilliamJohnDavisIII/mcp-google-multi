@@ -55,7 +55,7 @@ function decodeBody(
   if (html.length > 0) {
     const joined = html.join('\n\n');
     if (rawHtml) return { body: joined, bodyFormat: 'html' };
-    // HTML-only -> Markdown (D6). turndown failure degrades to plain text.
+    // HTML-only -> Markdown. turndown failure degrades to plain text.
     const { text, ok } = htmlToMarkdown(joined);
     return { body: text, bodyFormat: ok ? 'markdown' : 'plain' };
   }
@@ -85,9 +85,9 @@ function getAttachments(payload: any): GmailAttachment[] {
   return attachments;
 }
 
-// A8 reply auto-fill: parse an RFC 5322 address header into lowercased
+// Reply auto-fill: parse an RFC 5322 address header into lowercased
 // addr-specs (+ display names) using nodemailer's bundled addressparser, which
-// already rides the A4 compose dep. Groups are flattened; entries without an
+// already rides the compose dep. Groups are flattened; entries without an
 // address are dropped.
 interface ParsedAddress { address: string; name: string }
 function parseAddresses(headerValue: string): ParsedAddress[] {
@@ -104,7 +104,7 @@ function parseAddresses(headerValue: string): ParsedAddress[] {
 }
 const normAddr = (a: string): string => a.trim().toLowerCase();
 /** Rebuild a comma-separated address header; composeRaw/MailComposer re-encodes
- * names (RFC 2047) and the A4 CRLF pre-check applies, so derived recipients get
+ * names (RFC 2047) and the compose CRLF pre-check applies, so derived recipients get
  * the same header-injection guard as caller-supplied ones. */
 function formatAddresses(list: ParsedAddress[]): string {
   return list.map((a) => (a.name ? `${a.name} <${a.address}>` : a.address)).join(', ');
@@ -154,7 +154,7 @@ interface ReplyDerivation {
 
 /** Fetch the reply source once and derive threading headers plus (auto-fill)
  * to/cc/subject. On any fetch failure, degrade to the API id for threading and
- * report sourceFound:false so the caller can decide (per A8 error dispositions). */
+ * report sourceFound:false so the caller can decide. */
 export async function resolveReply(
   gmail: any,
   account: string,
@@ -223,8 +223,8 @@ const BODY_CAP_CHARS = 50_000;
 const BATCH_MAX_RESULT_CHARS = 100_000;
 // Gmail's messages.send raw/JSON path rejects messages near ~25 MB (the wire
 // message is base64-encoded, ~+33% over the raw bytes), so cap the ESTIMATED
-// ENCODED total there rather than the spec's nominal 35 MB raw (spike/live
-// correction — a 35 MB raw payload is ~47 MB on the wire and Gmail 400s it).
+// ENCODED total there rather than the spec's nominal 35 MB raw (a 35 MB raw
+// payload is ~47 MB on the wire and Gmail 400s it).
 const GMAIL_MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
 const estimateEncoded = (rawBytes: number) => Math.ceil((rawBytes * 4) / 3);
 
@@ -380,7 +380,7 @@ export function parseMessage(
 }
 
 /**
- * A9 gmail_read_batch core: fetch N ids with bounded parallelism, parse each,
+ * gmail_read_batch core: fetch N ids with bounded parallelism, parse each,
  * and bound the aggregate output. Order is preserved by input index. A per-id
  * failure becomes a `{ id, error }` entry; an account-wide auth/scope failure
  * is rethrown so the caller maps it to a whole-call isError. Returns the
@@ -489,7 +489,7 @@ export function compactMessageRow(m: GmailMessageHeader): { id: string; from: st
 }
 
 export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps = {}): void {
-  // Per-registry, LIVE account enum + injectable client (S1.10): the
+  // Per-registry, LIVE account enum + injectable client: the
   // schema follows the registry's account view at parse time, and the
   // custody path is the context's, not the process global.
   const accountEnum = accountArgLive(() => server.accountAliases()).optional();
@@ -504,7 +504,7 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
         'pass full=true for threadId, to, labelIds and the untruncated snippet.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        query: z.string().describe('Gmail search syntax, e.g. "from:monaam is:unread"'),
+        query: z.string().describe('Gmail search syntax, e.g. "from:alice is:unread"'),
         maxResults: coerceNumber(z.number().min(1).max(100)).optional()
           .describe('Max results to return (default: 20, max: 100)'),
         full: coerceBoolean.optional().describe('Return the full row shape instead of the compact default'),

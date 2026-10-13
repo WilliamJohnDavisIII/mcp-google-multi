@@ -19,7 +19,7 @@ describe('addFormSchema', () => {
 });
 
 describe('validateAddForm', () => {
-  const existing = ['ic', 'personal'];
+  const existing = ['team', 'personal'];
 
   it('accepts a clean row and collects checkbox bundles', () => {
     const r = validateAddForm({ alias: 'work', email: 'a@b.com', forms: true, chat: true, admin: false }, existing);
@@ -60,7 +60,7 @@ describe('validateAddForm', () => {
   });
 
   it('rejects a duplicate alias with E_ALIAS_EXISTS', () => {
-    const r = validateAddForm({ alias: 'ic', email: 'a@b.com' }, existing);
+    const r = validateAddForm({ alias: 'team', email: 'a@b.com' }, existing);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.slug).toBe('E_ALIAS_EXISTS');
   });
@@ -126,7 +126,7 @@ describe('argsToAddForm (argument-mode fallback)', () => {
   });
 });
 
-describe('scopeGrantDiff (BR5)', () => {
+describe('scopeGrantDiff', () => {
   it('returns the requested scopes that were not granted', () => {
     const requested = ['a', 'b', 'c'];
     expect(scopeGrantDiff(requested, 'a c')).toEqual(['b']);

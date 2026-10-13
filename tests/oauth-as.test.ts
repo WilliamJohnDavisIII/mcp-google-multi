@@ -127,7 +127,7 @@ const authorizeQuery = (over: Record<string, string> = {}) =>
   new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', resource: `${BASE}/mcp`, state: 'client-xyz', ...over }).toString();
 const form = (o: Record<string, string>) => ({ headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(o).toString() });
 
-describe('authenticate threads verified claims (S1.4)', () => {
+describe('authenticate threads verified claims', () => {
   const buildAs = () =>
     buildAuthServer(
       { base: BASE, resourceUri: `${BASE}/mcp`, secret, ownerEmails: ['owner@x.example'], cimdIssuers: ['claude.ai'], masterKey: 'mk', refreshStorePath: path.join(tmp, 'mcp-tokens.enc') },
@@ -156,7 +156,7 @@ describe('authenticate threads verified claims (S1.4)', () => {
   });
 });
 
-describe('redirectAllowed (C6)', () => {
+describe('redirectAllowed', () => {
   it('exact match, fixed claude.ai, and port-agnostic loopback', () => {
     expect(redirectAllowed(REDIRECT, [])).toBe(true); // fixed callback always allowed
     expect(redirectAllowed('https://claude.ai/cb', ['https://claude.ai/cb'])).toBe(true);
@@ -251,7 +251,7 @@ describe('success-path observability (logs completions, not just failures)', () 
   });
 });
 
-describe('negative paths (one per §5.12 MUST)', () => {
+describe('negative paths (one per spec MUST)', () => {
   it('CIMD fetch fail / unknown issuer -> 400 invalid_client (SSRF-blocked)', async () => {
     const port = await start();
     const r = await req(port, 'GET', `/authorize?${authorizeQuery({ client_id: 'https://evil.example/c' })}`);
@@ -420,7 +420,7 @@ describe('negative paths (one per §5.12 MUST)', () => {
     expect(new URL(approved.headers.location as string).searchParams.get('state')).toBeTruthy();
   });
 
-  it('clientless alias_reauth link (BV-1 in-call re-auth) redirects to Google with no client leg', async () => {
+  it('clientless alias_reauth link (in-call re-auth) redirects to Google with no client leg', async () => {
     const port = await start();
     const r = await req(port, 'GET', reauthPath('work'));
     expect(r.status).toBe(302);
@@ -532,7 +532,7 @@ describe('negative paths (one per §5.12 MUST)', () => {
   });
 });
 
-describe('owner_gate Google leg is bound to the browser that started it (H4 F1)', () => {
+describe('owner_gate Google leg is bound to the browser that started it', () => {
   const ATTACKER_CB = 'https://attacker.example/cb';
   const bindCookies = (jar: Jar) => [...jar.keys()].filter((k) => k.includes('mgm-og-'));
 
@@ -810,7 +810,7 @@ describe('owner_gate Google leg is bound to the browser that started it (H4 F1)'
   });
 });
 
-describe('a failed Google code exchange answers a generic page (H4 F12)', () => {
+describe('a failed Google code exchange answers a generic page', () => {
   const detail = 'request to https://oauth2.googleapis.com/token failed, reason: connect ECONNREFUSED 10.9.8.7:3128\nproxy-authorization: Basic c2VjcmV0';
 
   it('owner_gate and alias_reauth show no exchange detail; the log gets it on one line', async () => {
@@ -857,7 +857,7 @@ describe('a failed Google code exchange answers a generic page (H4 F12)', () => 
   });
 });
 
-describe('a hostile value reaches the log as one escaped, bounded line (H4 F7)', () => {
+describe('a hostile value reaches the log as one escaped, bounded line', () => {
   const UNSAFE = /[\r\n\u2028\u2029\p{Cc}]/u;
   const NEL = String.fromCharCode(0x85);
   const ALIAS = 'side\ncallback ok flow=alias_add alias=forged';
@@ -986,7 +986,7 @@ describe('a hostile value reaches the log as one escaped, bounded line (H4 F7)',
   });
 });
 
-describe('CIMD fetches at /authorize are capped, and cached only once valid (H4 F6)', () => {
+describe('CIMD fetches at /authorize are capped, and cached only once valid', () => {
   /** A fetchCimd whose `/held-` documents wait for release(); every call is recorded. */
   function heldCimd() {
     const gates: (() => void)[] = [];
@@ -1111,7 +1111,7 @@ describe('DCR /register bounds (unbounded-store DoS guard)', () => {
 
 type AuthServerDepsMint = ReturnType<typeof buildAuthServer>['mintFlowState'];
 
-describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
+describe('refresh lifetimes on AuthServerConfig', () => {
   // deps.now also dates the state and the code, which jose checks against the
   // real clock, so the code is redeemed at off = 0 and only refreshes move on.
   let off = 0;
@@ -1139,7 +1139,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
     expect(r.body.access_token).toBeUndefined();
   };
 
-  it('O1 refreshIdleSec ends a session that long after its last refresh', async () => {
+  it('refreshIdleSec ends a session that long after its last refresh', async () => {
     const port = await startWith({ refreshIdleSec: 60 });
     const first = await signIn(port);
     const r1 = await refreshAt(port, 59_000, first);
@@ -1147,7 +1147,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
     expectInvalidGrant(await refreshAt(port, 119_000, r1.body.refresh_token));
   });
 
-  it('O2 refreshMaxAgeSec ends a session that long after its sign-in, however often it refreshes', async () => {
+  it('refreshMaxAgeSec ends a session that long after its sign-in, however often it refreshes', async () => {
     const port = await startWith({ refreshMaxAgeSec: 120 });
     let t = await signIn(port);
     for (const at of [60_000, 119_000]) {
@@ -1158,7 +1158,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
     expectInvalidGrant(await refreshAt(port, 121_000, t));
   });
 
-  it('O3 a lifetime together with an injected refreshStore throws; an injected store alone works', () => {
+  it('a lifetime together with an injected refreshStore throws; an injected store alone works', () => {
     const cfg = { base: BASE, resourceUri: `${BASE}/mcp`, secret, ownerEmails: ['owner@x.example'], cimdIssuers: ['claude.ai'], masterKey: 'mk', refreshStorePath: path.join(tmp, 'mcp-tokens.enc') };
     const refreshStore = new RefreshStore(path.join(tmp, 'injected.enc'), 'mk');
     for (const over of [{ refreshMaxAgeSec: 60 }, { refreshIdleSec: 60 }, { refreshMaxFamiliesPerSub: 10 }]) {
@@ -1168,7 +1168,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
     expect(() => buildAuthServer({ ...cfg, refreshIdleSec: 60 })).not.toThrow();
   });
 
-  it('O4 refreshMaxFamiliesPerSub reaches the refresh store buildAuthServer creates: a subject over the cap has its least-recently-used session dropped', async () => {
+  it('refreshMaxFamiliesPerSub reaches the refresh store buildAuthServer creates: a subject over the cap has its least-recently-used session dropped', async () => {
     const port = await startWith({ refreshMaxFamiliesPerSub: 1 });
     const first = await signIn(port);
     const second = await signIn(port); // same owner subject: 2nd sign-in exceeds the cap of 1, drops the 1st
@@ -1182,7 +1182,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
     expect(() => buildAuthServer({ ...cfg, refreshMaxFamiliesPerSub: 0 })).toThrow('E_REFRESH_OPTION_INVALID: maxFamiliesPerSub must be a positive whole number');
   });
 
-  it('O5 revoked and expired families reach the log with a tag, never the token, subject or email', async () => {
+  it('revoked and expired families reach the log with a tag, never the token, subject or email', async () => {
     const logs: string[] = [];
     const port = await startWith({ refreshIdleSec: 60 }, { log: (l) => logs.push(l) });
     const stolen = await signIn(port);
@@ -1208,7 +1208,7 @@ describe('refresh lifetimes on AuthServerConfig (ruling 10)', () => {
   });
 });
 
-describe('alias_add flow + resolveSubject seam (S1.14)', () => {
+describe('alias_add flow + resolveSubject seam', () => {
   const binds: Record<string, unknown>[] = [];
   afterEach(() => void binds.splice(0));
 
@@ -1528,9 +1528,9 @@ describe('alias_add flow + resolveSubject seam (S1.14)', () => {
     expect(seen).toEqual([['member@x.example', { sub: undefined, hd: undefined }]]);
   });
 
-  // H3 PR1: a resolveSubject denial may explain itself; null keeps today's
+  // A resolveSubject denial may explain itself; null keeps today's
   // bare redirect exactly.
-  describe('resolveSubject denial (H3)', () => {
+  describe('resolveSubject denial', () => {
     it('a denial with a description adds error_description to the access_denied redirect', async () => {
       const { port } = await startMt({}, {
         resolveSubject: () => ({ denied: { description: 'This workspace is suspended by its operator.' } }),

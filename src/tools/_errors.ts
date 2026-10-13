@@ -172,7 +172,7 @@ function netCodeOf(error: any): string | undefined {
   return undefined;
 }
 
-/** Console deep-link to enable one API (noob-proofing hint, B10). */
+/** Console deep-link to enable one API (noob-proofing hint). */
 function apiEnableLink(api: string): string {
   return `https://console.cloud.google.com/apis/library/${api}.googleapis.com`;
 }
@@ -457,9 +457,9 @@ export function mapGoogleError(
           rendered?.hint ??
           (`Network failure (${netCode}) before reaching Google - not an auth or API problem. Usually transient: retry. ` +
             'If it persists on a high-latency or broken-IPv6 link, raise the happy-eyeballs budget: NODE_OPTIONS=--network-family-autoselection-attempt-timeout=4000 (server default 2000ms), and check connectivity with curl.'),
-        // Not an override site (C5 is the only kind whose retriable the host
-        // may flip): a multi-tenant host keeps core's retriable codes for
-        // network_error.
+        // Not an override site (scope_not_granted is the only kind whose
+        // retriable the host may flip): a multi-tenant host keeps core's
+        // retriable codes for network_error.
         retriable: RETRIABLE_NET_CODES.has(netCode),
         account,
       };

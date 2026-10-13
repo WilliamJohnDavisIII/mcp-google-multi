@@ -32,7 +32,7 @@ describe('resolvePolicy', () => {
     expect(resolvePolicy({ GOOGLE_PROFILE: 'bogus' }).profile).toBe('read-only');
   });
 
-  // B14: transport is a reserved seam threaded into the policy.
+  // Transport is a reserved seam threaded into the policy.
   it('threads the transport (default stdio; http when passed)', () => {
     expect(resolvePolicy({}).transport).toBe('stdio');
     expect(resolvePolicy({}, { transport: 'http' }).transport).toBe('http');
@@ -105,7 +105,7 @@ describe('describePolicy', () => {
   });
 });
 
-describe('writeDisabledResult hint provider routing (H3)', () => {
+describe('writeDisabledResult hint provider routing', () => {
   afterEach(() => setHintProvider(null));
 
   function echo() {

@@ -35,7 +35,7 @@ describe('registerDiscoverTools', () => {
     expect(gmail.config.description).toContain('search, send');
   });
 
-  it('caps the description vocabulary: curated listed up to the cap, generated grouped (RQ2 token diet)', () => {
+  it('caps the description vocabulary: curated listed up to the cap, generated grouped (token diet)', () => {
     const registered: { name: string; config: { description: string } }[] = [];
     const server = {
       registerTool: (name: string, config: never, handler: never) => {
@@ -99,7 +99,7 @@ describe('registerDiscoverTools', () => {
     expect(empty.next).toContain('without query');
   });
 
-  it('a hint provider renders writeControl via kind policy_summary (H3)', async () => {
+  it('a hint provider renders writeControl via kind policy_summary', async () => {
     const seen: unknown[] = [];
     setHintProvider({
       render: (c) => {

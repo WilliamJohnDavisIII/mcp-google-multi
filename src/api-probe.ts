@@ -4,7 +4,7 @@ import { mapGoogleError } from './tools/_errors.js';
 import type { Account } from './accounts.js';
 import type { ApiProbeResult } from './doctor.js';
 
-// Section-6 live probe (B9): one cheap authenticated read per service to catch
+// Doctor section-6 live probe: one cheap authenticated read per service to catch
 // accessNotConfigured/SERVICE_DISABLED before real work. Probes are selected
 // by the GRANTED scopes on the probed account (an ungranted service would only
 // 403 with insufficient_scope, which says nothing about enablement). Admin SDK

@@ -67,7 +67,7 @@ describe('http-transport pure helpers', () => {
   });
 });
 
-// ---- integration: real McpServer over the host (BV-3) ------------------------
+// ---- integration: real McpServer over the host -------------------------------
 
 const hosts: HttpTransportHost[] = [];
 afterEach(async () => {
@@ -151,7 +151,7 @@ const initBody = {
   params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
 };
 
-describe('HttpTransportHost (BV-3: stateless dispatch)', () => {
+describe('HttpTransportHost (stateless dispatch)', () => {
   // Every frame of a batch is screened synchronously in one tick, so an
   // uncapped batch multiplied any per-call cost by the frames in one body.
   it('refuses a JSON-RPC batch above the frame cap before dispatching any of it', async () => {
@@ -188,7 +188,7 @@ describe('HttpTransportHost (BV-3: stateless dispatch)', () => {
     expect(names).toContain('ping');
   });
 
-  it('stamps the authenticated sub into ctx.http.authInfo.extra for tool handlers (S1.4)', async () => {
+  it('stamps the authenticated sub into ctx.http.authInfo.extra for tool handlers', async () => {
     const port = await startHost(() => ({ ok: true, sub: 'tenant-42' }));
     await request(port, 'POST', '/mcp', { headers: { accept: MCP_ACCEPT }, body: initBody });
     const res = await request(port, 'POST', '/mcp', {
@@ -210,7 +210,7 @@ describe('HttpTransportHost (BV-3: stateless dispatch)', () => {
     expect(JSON.parse(res.text).result.content[0].text).toBe('owner');
   });
 
-  it('resolveServer routes two subjects to two distinct servers (S1.15)', async () => {
+  it('resolveServer routes two subjects to two distinct servers', async () => {
     const named = (marker: string) => {
       const s = new McpServer({ name: `srv-${marker}`, version: '0.0.0' });
       s.registerTool('marker', { description: 'which server am I', inputSchema: z.object({}) }, async () => ({
@@ -363,7 +363,7 @@ describe('HttpTransportHost (BV-3: stateless dispatch)', () => {
     expect(boot.argShapeFor).not.toHaveBeenCalled();
   });
 
-  it('per-subject lock lanes are independent: one tenant\'s slow call never queues another\'s (S1.15)', async () => {
+  it('per-subject lock lanes are independent: one tenant\'s slow call never queues another\'s', async () => {
     const named = (marker: string, delayMs: number) => {
       const s = new McpServer({ name: `srv-${marker}`, version: '0.0.0' });
       s.registerTool('work', { description: 'do work', inputSchema: z.object({}) }, async () => {
@@ -722,7 +722,7 @@ async function laneHost(extra: Partial<HttpHostOptions> = {}) {
   return { host, port, open, held, logs, call, admitted };
 }
 
-describe('HttpTransportHost resolveServer refusal (H3 PR1)', () => {
+describe('HttpTransportHost resolveServer refusal', () => {
   async function refusalHost(resolveServer: HttpHostOptions['resolveServer'], log: (l: string) => void = () => {}) {
     const config = { ...resolveHttpConfig({ MCP_TRANSPORT: 'http' }), port: 0 };
     const host = new HttpTransportHost({

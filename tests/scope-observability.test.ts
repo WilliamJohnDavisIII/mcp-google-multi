@@ -73,7 +73,7 @@ describe('remediation hints (gh-CLI style, honest retriable)', () => {
     expect(h.retriable).toBe(true);
   });
 
-  it('requestable over HTTP: the hint becomes a clickable AS re-auth link (S1.18)', () => {
+  it('requestable over HTTP: the hint becomes a clickable AS re-auth link', () => {
     setHttpReauthLink((a) => `https://mcp.example.com/authorize?flow=alias_reauth&alias=${encodeURIComponent(a)}&exp=1&sig=s`);
     const h = scopeHint(FORMS_BODY, { state: 'requestable_not_granted' }, 'work');
     expect(h.hint).toContain('https://mcp.example.com/authorize?flow=alias_reauth&alias=work');
@@ -95,7 +95,7 @@ describe('remediation hints (gh-CLI style, honest retriable)', () => {
   });
 });
 
-describe('scopeHint provider routing (H3)', () => {
+describe('scopeHint provider routing', () => {
   afterEach(() => setHintProvider(null));
 
   function echo() {

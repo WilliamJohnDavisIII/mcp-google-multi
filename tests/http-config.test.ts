@@ -37,7 +37,7 @@ describe('resolveTransport', () => {
   });
 });
 
-describe('canonicalizePublicUrl (BR4)', () => {
+describe('canonicalizePublicUrl', () => {
   it('strips a trailing slash', () => {
     expect(canonicalizePublicUrl('https://mcp.example.com/')).toBe('https://mcp.example.com');
     expect(canonicalizePublicUrl('https://mcp.example.com///')).toBe('https://mcp.example.com');

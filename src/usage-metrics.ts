@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { withFileLock, atomicWriteFileSync } from './fs-atomic.js';
 
-// Local usage metrics (metrics-feature-spec.md). Default OFF at every layer;
+// Local usage metrics. Default OFF at every layer;
 // when off, nothing here initializes and the dispatch chain carries no wrapper.
 // Zero network egress is structural: this module's import set is a tested
 // allowlist (fs/path/os/crypto/perf_hooks/fs-atomic), so egress code cannot

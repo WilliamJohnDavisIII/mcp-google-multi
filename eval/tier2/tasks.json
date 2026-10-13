@@ -1,5 +1,5 @@
 {
-  "comment": "Tier-2 agent eval tasks (read-only by design; safe under GOOGLE_PROFILE=read-only). expectFirst = acceptable FIRST calls to the eval server's tools (selection metric; client-side ToolSearch calls are not counted, and the expected tool's own <service>_discover is scored separately as first-service); successTools = at least one non-error result from this set makes the run a success. Derived from the WS3 transcript task mix.",
+  "comment": "Tier-2 agent eval tasks (read-only by design; safe under GOOGLE_PROFILE=read-only). expectFirst = acceptable FIRST calls to the eval server's tools (selection metric; client-side ToolSearch calls are not counted, and the expected tool's own <service>_discover is scored separately as first-service); successTools = at least one non-error result from this set makes the run a success. Derived from a real-usage transcript task mix.",
   "tasks": [
     {
       "id": "unread-count",

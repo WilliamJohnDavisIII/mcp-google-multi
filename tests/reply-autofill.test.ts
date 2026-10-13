@@ -37,7 +37,7 @@ describe('deriveReplySubject', () => {
   });
 });
 
-describe('resolveReply (A8 auto-fill)', () => {
+describe('resolveReply (auto-fill)', () => {
   it('derives to=From, subject=Re:, threading headers; no cc without replyAll', async () => {
     const g = fakeGmail({
       headers: H({ From: 'Alice <alice@ext.com>', To: 'me@acct.com', Subject: 'Question', 'Message-ID': '<abc@ext>' }),

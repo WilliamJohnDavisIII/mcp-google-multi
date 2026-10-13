@@ -1,8 +1,8 @@
-// B13 token model (oauth-authorization-server.md §Data model): the MCP access
+// Token model: the MCP access
 // token (HS256 JWT, jose-only — AS==RS so no JWKS), the signed self-contained
 // `state` and authorization code, the in-memory single-use replay guard, and
-// the rotated refresh-token store. Keyed by the provisioned MCP_JWT_KEY
-// (B5), so tokens survive a restart as long as the key persists.
+// the rotated refresh-token store. Keyed by the provisioned MCP_JWT_KEY,
+// so tokens survive a restart as long as the key persists.
 
 import { createHash, createHmac, hkdfSync, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -170,7 +170,7 @@ export async function verifyAuthzCode(token: string, base: string, secret: Uint8
   return (await verifyArtifact(token, 'mcp_code', base, secret, nowSec)) as unknown as CodePayload & { jti: string; exp: number };
 }
 
-// --- Replay guard (C10/C17: single-use, capped, TTL-evicted) ----------------
+// --- Replay guard (single-use, capped, TTL-evicted) -------------------------
 
 /** `full`: there is no room without forgetting a jti that is still live. */
 export type ReplaySpend = 'ok' | 'replay' | 'full';
@@ -197,7 +197,7 @@ export class ReplayGuard {
 
   /** Record a jti as spent. A full guard refuses instead of evicting a live
    * jti: a flood of spends would otherwise make a spent artifact usable again,
-   * such as a callback the browser binding refused (H4 F1). `artifactExpMs`
+   * such as a callback the browser binding refused. `artifactExpMs`
    * keeps the record alive as long as the artifact itself, even when the clock
    * stepped back between its signing and this spend. */
   spend(jti: string, ttlMs: number, nowMs: number, artifactExpMs = 0): ReplaySpend {
@@ -255,7 +255,7 @@ export class ReplayGuard {
   }
 }
 
-// --- Refresh tokens (C14: rotated on every use; H4 F2: generation-counted) --
+// --- Refresh tokens (rotated on every use, generation-counted) --------------
 
 /** An earlier release's record, keyed by its live token. */
 export interface RefreshRecord {
@@ -509,10 +509,10 @@ function lifetimeMs(name: string, v: unknown): number | undefined {
  * Persisted (encrypted under MASTER_KEY) refresh-token store. Rotates on every
  * use, and a token carries its family and generation under a MAC, so
  * presenting any generation the family has rotated past is REUSE: the family
- * is revoked for the rest of its life (#7 / C14, H4 F2). The store keeps one
+ * is revoked for the rest of its life. The store keeps one
  * record per family, whatever its rotation count. Every read-modify-write goes
  * through a file lock so concurrent stdio+HTTP processes can't lost-update or
- * double-spend (#12). See docs/internals.md.
+ * double-spend. See docs/internals.md.
  */
 export class RefreshStore {
   private readonly log: (line: string) => void;

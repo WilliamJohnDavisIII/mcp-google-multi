@@ -40,7 +40,7 @@ describe('revokeGoogleToken (best-effort, never throws)', () => {
   });
 });
 
-describe('purgeTenantTokens (S1.21: only the target tenant)', () => {
+describe('purgeTenantTokens (only the target tenant)', () => {
   it('removes exactly the target tenant\'s .enc files, revoking each first', async () => {
     seedTenant('tenant-a', ['work', 'personal']);
     seedTenant('tenant-b', ['work']);
@@ -83,7 +83,7 @@ describe('removeTenantDir', () => {
   });
 });
 
-describe('RefreshStore.purgeTenant (S1.21)', () => {
+describe('RefreshStore.purgeTenant', () => {
   it('drops only sub-matching active records; other subs keep rotating', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'gm-purge-'));
     try {

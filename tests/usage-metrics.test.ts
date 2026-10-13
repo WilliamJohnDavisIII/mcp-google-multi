@@ -191,7 +191,7 @@ describe('recording and derivations', () => {
     expect(readDay(dir).retries).toEqual({});
   });
 
-  it('sequencingEnabled=false skips the retry and bigram chains that would link distinct callers (S1.17)', async () => {
+  it('sequencingEnabled=false skips the retry and bigram chains that would link distinct callers', async () => {
     // Baseline: a shared process links caller A's error to caller B's success.
     const linked = tmp();
     let t = 0;

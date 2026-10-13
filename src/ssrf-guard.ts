@@ -1,7 +1,6 @@
-// B13 / C11: SSRF guard for every server-side fetch (the CIMD client_id doc).
-// D4 decision (dependencies-and-bv §2.2): a small AUDITED private-range check,
-// no dependency — HTTPS-only, resolve-then-check ALL addresses (anti-rebind),
-// no redirects followed, and capped size and time. Blocks 10/8, 172.16/12,
+// SSRF guard for every server-side fetch (the CIMD client_id doc).
+// A small AUDITED private-range check, no dependency — HTTPS-only,
+// resolve-then-check ALL addresses (anti-rebind), no redirects followed, and capped size and time. Blocks 10/8, 172.16/12,
 // 192.168/16, 127/8, 169.254/16, 0/8, multicast, ::1, fc00::/7, fe80::/10, and
 // v4-mapped forms.
 

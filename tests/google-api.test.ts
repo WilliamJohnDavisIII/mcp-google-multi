@@ -419,7 +419,7 @@ describe('google_api_call', () => {
     expect(payload.hint).toContain('userId');
   });
 
-  describe('hint provider routing (H3)', () => {
+  describe('hint provider routing', () => {
     afterEach(() => setHintProvider(null));
 
     function echo() {

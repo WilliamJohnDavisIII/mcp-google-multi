@@ -11,7 +11,7 @@ import { registerDiagnoseTool } from '../src/doctor.js';
 import { registerAccountWizardTools } from '../src/tools/account-wizard.js';
 import type { Policy } from '../src/write-control.js';
 
-// S1.22: the #1001 failure mode (a tool argument, not the verified session,
+// The failure mode (a tool argument, not the verified session,
 // selects whose identity/credentials to use) closed PERMANENTLY: no
 // registered tool - curated, generated, or meta - may declare an
 // identity-shaped input field. The verified JWT sub is the ONLY identity
@@ -59,7 +59,7 @@ const GOOGLE_API_PARAM_EXCEPTIONS = new Set([
   'workspaceevents_tasks_subscribe.tenant',
 ]);
 
-describe('static identity-field guard (S1.22, #1001)', () => {
+describe('static identity-field guard', () => {
   it('no registered tool declares an identity-shaped input field', () => {
     const registry = fullRegistry();
     expect(registry.tools.length).toBeGreaterThan(900); // the FULL surface, nothing gated off

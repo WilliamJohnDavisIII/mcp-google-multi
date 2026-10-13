@@ -44,7 +44,7 @@ function depsFor(aliases: string[], tokens: Record<string, object | null>, count
   };
 }
 
-describe('makeGetClient (S1.7 factory + single-flight)', () => {
+describe('makeGetClient (factory + single-flight)', () => {
   it('same-tick callers share ONE in-flight client; sequential callers get fresh ones', async () => {
     const d = depsFor(['work'], { work: { refresh_token: 'rt-1' } });
     const fn = makeGetClient('ctx-a', d);
@@ -93,7 +93,7 @@ describe('makeGetClient (S1.7 factory + single-flight)', () => {
   });
 });
 
-describe('createTokenStore (S1.7 custody closures)', () => {
+describe('createTokenStore (custody closures)', () => {
   const dirs: string[] = [];
   afterEach(() => {
     for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
@@ -129,7 +129,7 @@ describe('createTokenStore (S1.7 custody closures)', () => {
     expect(store.hasToken('work')).toBe(true);
   });
 
-  it('updateToken never recreates a token file that was never written, or one removed out from under it (R3)', () => {
+  it('updateToken never recreates a token file that was never written, or one removed out from under it', () => {
     const dir = tmp();
     const store = createTokenStore(dir, { tenantId: 'tenant-a', resolveKey: () => 'k' });
 

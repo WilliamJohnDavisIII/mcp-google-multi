@@ -3,9 +3,9 @@ import http from 'node:http';
 import { URL } from 'node:url';
 import type { AddressInfo } from 'node:net';
 
-// Shared loopback OAuth consent (leg C of cc-auth), used by the account wizard
-// (B7) and the `auth --account` CLI. Live-server-safe: typed errors instead of
-// process.exit, and a timeout so a never-completed consent can't wedge a tool
+// Shared loopback OAuth consent (leg C: per-alias Google tokens), used by the
+// account wizard and the `auth --account` CLI. Live-server-safe: typed errors
+// instead of process.exit, and a timeout so a never-completed consent can't wedge a tool
 // call forever. The listener binds an EPHEMERAL loopback port (RFC 8252 §7.3;
 // Google Desktop clients accept any http://localhost:<port> redirect), so a
 // second local process on a fixed port can never break auth.

@@ -41,7 +41,7 @@ function formatContact(person: any) {
   };
 }
 
-// --- A10 contacts_resolve: name -> one canonical email ---------------------
+// --- contacts_resolve: name -> one canonical email -------------------------
 
 export interface ResolveCandidate {
   resourceName: string;
@@ -51,7 +51,7 @@ export interface ResolveCandidate {
   hasOrg: boolean;
 }
 
-/** Accent-fold + lowercase for name comparison ("Rym" == "Rÿm"). */
+/** Accent-fold + lowercase for name comparison ("Zoe" == "Zoë"). */
 const foldName = (s: string): string =>
   s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
 
@@ -70,7 +70,7 @@ function pickEmail(c: ResolveCandidate): { value: string; type?: string; primary
 }
 
 /** Deterministic rank tuple; higher wins, compared lexicographically so the
- * first discriminating rule decides (A10 tie-break table). */
+ * first discriminating rule decides. */
 function scoreTuple(c: ResolveCandidate, foldedQuery: string): number[] {
   const exact = foldName(c.displayName) === foldedQuery ? 1 : 0;   // 1. exact over prefix
   const saved = c.source === 'contacts' ? 1 : 0;                    // 2. saved over other-contact
@@ -147,7 +147,7 @@ function dedupeCandidates(list: ResolveCandidate[]): ResolveCandidate[] {
 }
 
 export function registerContactsTools(server: ToolRegistry, deps: CuratedToolDeps = {}): void {
-  // Per-registry, LIVE account enum + injectable client (S1.10): the
+  // Per-registry, LIVE account enum + injectable client: the
   // schema follows the registry's account view at parse time, and the
   // custody path is the context's, not the process global.
   const accountEnum = accountArgLive(() => server.accountAliases()).optional();
@@ -203,7 +203,7 @@ export function registerContactsTools(server: ToolRegistry, deps: CuratedToolDep
       description: 'Resolve a free-text name/alias to ONE canonical email address (ranked + tie-broken), so you need not hand-expand transliteration OR-queries. Returns a single confident match, an explicit ambiguous candidate list, or null when nothing matches. For picking a recipient before gmail_send.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        name: z.string().min(1).describe('Free-text name or alias to resolve (e.g. "Rym")'),
+        name: z.string().min(1).describe('Free-text name or alias to resolve (e.g. "Zoe")'),
         maxCandidates: z.number().min(1).max(10).default(5).optional()
           .describe('Max candidates to return when ambiguous (1-10, default: 5)'),
         includeOtherContacts: coerceBoolean.optional()

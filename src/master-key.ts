@@ -59,7 +59,7 @@ function systemKeychain(account: string): KeychainEntry | null {
 }
 
 // Default keychain factory, replaceable ONLY for tests: unit tests must never
-// read or write the developer's real OS keyring (the BR-5 mirror once leaked a
+// read or write the developer's real OS keyring (the env->keychain mirror once leaked a
 // test fixture key into a real GNOME keyring — never again).
 let keychainFactory: (account: string) => KeychainEntry | null = systemKeychain;
 
@@ -133,7 +133,7 @@ function resolveKey(
   const fromFile = readKeyFile(filePath);
   if (fromFile) return { key: fromFile, provenance: 'file' };
 
-  // Generate-on-setup. The hard guard is cc-security Cgen: minting a fresh
+  // Generate-on-setup. The hard guard: minting a fresh
   // MASTER_KEY while <alias>.enc files exist would silently brick them all.
   if (hardGuard && hasAnyToken()) {
     fail(
@@ -197,7 +197,7 @@ function resolveKey(
 let cachedMaster: ResolvedKey | null = null;
 let cachedJwt: ResolvedKey | null = null;
 
-/** BR-1 single choke point: no other module may read the env vars directly.
+/** Single choke point: no other module may read the env vars directly.
  * Boot/CLI form: failures exit with a clean stderr slug ("fatal at startup"). */
 export function resolveMasterKey(deps?: KeyDeps): ResolvedKey {
   if (deps) return resolveKey('MASTER_KEY', 'master.key', true, deps);
@@ -235,7 +235,7 @@ export function resolveJwtKey(deps?: KeyDeps): ResolvedKey {
 let mirrored = false;
 
 /**
- * BR-5: after the FIRST successful token decrypt with an env-sourced key,
+ * After the FIRST successful token decrypt with an env-sourced key,
  * mirror it into the keychain (only when the keychain holds no entry) so the
  * key survives an env loss. Gating on a successful decrypt means a stale or
  * wrong env key is never mirrored. Best-effort: failures are doctor material,
@@ -254,7 +254,7 @@ export function noteSuccessfulDecrypt(): void {
   }
 }
 
-/** B6 reset: drop the generated MASTER_KEY material (0600 file + keychain
+/** Reset: drop the generated MASTER_KEY material (0600 file + keychain
  * entry) so the next run re-provisions. Never removes an env-provided key (the
  * deployer owns that; `env:true` flags it so reset can warn). The caller MUST
  * have wiped every .enc token first — regenerating with tokens present would

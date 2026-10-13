@@ -1,9 +1,9 @@
-// B15: after the setup wizard finalizes an account, offer to register the
+// After the setup wizard finalizes an account, offer to register the
 // server with the user's MCP client so they never hand-edit JSON. Pure core
 // (detection + entry building + idempotent apply), deps-injectable for tests.
 // Consent + non-TTY behavior live in the CLI/tool surfaces; secrets are NEVER
 // inlined — the server self-loads its .env from ~/.config/mcp-google-multi, so
-// a stdio entry needs no secret env at all (distribution.md B15).
+// a stdio entry needs no secret env at all.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import * as readline from 'node:readline';
@@ -133,7 +133,7 @@ export interface EntryOptions {
 
 /**
  * The client `mcpServers` entry. stdio needs no secret env: the server loads
- * its own .env from ~/.config/mcp-google-multi (cc-config R1), so we never
+ * its own .env from ~/.config/mcp-google-multi, so we never
  * inline MASTER_KEY / GOOGLE_CLIENT_SECRET into a world-readable client config.
  */
 export function buildServerEntry(opts: EntryOptions): ServerEntry {
@@ -243,7 +243,7 @@ export function applyFileEntry(
   return { ok: true, client: client.id, action: had ? 'updated' : 'added', path: p, backup };
 }
 
-/** Resolve stdio-vs-http mode from the current transport config (B11).
+/** Resolve stdio-vs-http mode from the current transport config.
  * http/both → a `url` entry; stdio → a `command` entry. */
 export function resolveMode(
   httpConfig?: { transport: 'stdio' | 'http' | 'both'; resourceUri: string },

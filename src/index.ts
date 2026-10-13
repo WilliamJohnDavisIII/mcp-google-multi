@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // First import: triggers accounts.js module load (env files + registry) before
-// anything else. Named to also pull the server-only empty-registry guard (BR-4).
+// anything else. Named to also pull the server-only empty-registry guard.
 import { assertServerAccountsConfigured } from './accounts.js';
 import { accountsAssertRequired, assertNoEnvAccountsMode, assertNoEnvOptionalScopesMode, isMultiTenantBoot, mtBootGates } from './boot-gates.js';
 
@@ -153,7 +153,7 @@ async function main() {
   const wantStdio = httpCfg.transport === 'stdio' || httpCfg.transport === 'both';
   const wantHttp = transportIncludesHttp(httpCfg.transport);
 
-  // BR-4: the SERVER never boots with an empty registry — stdio always, HTTP
+  // The SERVER never boots with an empty registry — stdio always, HTTP
   // when single-owner. The bootstrap and diagnostic CLIs above already
   // returned. A multi-tenant boot instead refuses the two process-wide env
   // vectors that would leak one operator's accounts/scopes into every tenant.
@@ -203,8 +203,8 @@ async function main() {
     }
   }
 
-  // Build one McpServer + registry per transport at boot (P1 / BV gap #4:
-  // never rebuilt per request); `both` runs the two concurrently.
+  // Build one McpServer + registry per transport at boot (never
+  // rebuilt per request); `both` runs the two concurrently.
   if (wantStdio) {
     const server = createMcpServer(pkg.version);
     const stdioMetrics = initMetricsFor('stdio', resolveDiscoveryMode());
@@ -250,7 +250,7 @@ async function main() {
       // mechanism exists", not a flat owner allowlist.
       gates.assertProvisioningGate();
     } else {
-      // BR3 / C13: the owner allowlist is the entire multi-tenant collapse;
+      // The owner allowlist is the entire multi-tenant collapse;
       // refuse to open an ungated HTTP endpoint.
       if (owners.length === 0) {
         process.stderr.write(
@@ -259,7 +259,7 @@ async function main() {
         process.exit(1);
       }
     }
-    // BR7: stateless HTTP cannot push tools/list_changed, so it forces curated.
+    // Stateless HTTP cannot push tools/list_changed, so it forces curated.
     const configuredMode = (process.env.GOOGLE_DISCOVERY ?? '').trim().toLowerCase();
     if (configuredMode && configuredMode !== 'curated') {
       process.stderr.write(`GOOGLE_DISCOVERY="${configuredMode}" is ignored over HTTP; the stateless transport forces "curated".\n`);
@@ -271,7 +271,7 @@ async function main() {
     registry.installListHandler();
     registerSetupPrompt(httpServer);
 
-    // B13: mount the OAuth 2.1 AS (legs A + B) + the Bearer authenticator.
+    // Mount the OAuth 2.1 AS (MCP-client tokens + owner login) + the Bearer authenticator.
     const { buildAuthServer, verifiedEmailFromIdToken } = await import('./oauth-as.js');
     const { jwtSecretFrom } = await import('./mcp-token.js');
     const { resolveJwtKey, resolveMasterKeyForDispatch } = await import('./master-key.js');
@@ -318,7 +318,7 @@ async function main() {
         log: (l) => process.stderr.write(`[as] ${l}\n`),
       },
     );
-    // BV-1: over HTTP, a dead/missing per-account token surfaces a clickable,
+    // Over HTTP, a dead/missing per-account token surfaces a clickable,
     // signed re-auth link into the AS's alias_reauth flow instead of a CLI hint.
     const { setHttpReauthLink } = await import('./reauth-hint.js');
     setHttpReauthLink((alias) => authServer.reauthLink(alias));
@@ -345,7 +345,7 @@ async function main() {
     });
     await host.start();
     process.stderr.write(`HTTP transport listening on http://${httpCfg.host}:${httpCfg.port} (public ${httpCfg.publicUrl})\n`);
-    // Graceful shutdown so `docker run --init` (B16) forwards SIGTERM cleanly.
+    // Graceful shutdown so `docker run --init` forwards SIGTERM cleanly.
     const shutdown = () => {
       host.close().finally(() => process.exit(0));
     };

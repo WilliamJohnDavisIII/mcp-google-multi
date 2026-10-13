@@ -1,6 +1,6 @@
 # Eval harness
 
-Three checks guard the tool surface (from the 6.0.0 quality backlog):
+Three checks guard the tool surface:
 
 1. **Lazy byte budget** (`npm run measure:lazy`, CI: `scripts/measure-tools.mjs --check`): lazy-mode `tools/list` must stay within 10 percent of `tests/fixtures/lazy-bytes-baseline.json`. Update the baseline deliberately with `--update`, in the PR that justifies the growth.
 2. **Contract suite** (`npm run eval:contract`, this directory): deterministic, network-free promptfoo assertions on the tool-surface contract, run in CI on every push/PR. Details below.
@@ -22,7 +22,7 @@ Pin the version under test: a bare `mcp-google-multi` resolves npm `latest`, whi
 
 Before any agent run, the runner starts the configured stdio server once and records its `serverInfo` (name, version, protocol) in the summary, so every result names what it measured. A server that cannot start, or a `claude` that cannot run non-interactively, stops the run at once instead of scoring every task as failed.
 
-Isolation: `--strict-mcp-config` (ONLY the eval server loads; without it the operator's personal MCP fleet joins the context and poisons tool selection); `--tools ToolSearch` (no shell, web or file tools; ToolSearch stays because Claude Code defers most MCP tools behind it); `--setting-sources local`, `--disable-slash-commands` and `--no-session-persistence` (the operator's hooks, plugins, skills and settings stay out, and runs leave no sessions behind); and a neutral temp cwd, so no project memory leaks in. The model is pinned via `--model` (default `sonnet`); keep it, and `--max-turns` (default 12), fixed across releases for comparable numbers.
+Isolation: `--strict-mcp-config` (ONLY the eval server loads; without it the operator's personal MCP fleet joins the context and poisons tool selection); `--tools ToolSearch` (no shell, web or file tools; ToolSearch stays because Claude Code defers most MCP tools behind it); `--setting-sources local`, `--disable-slash-commands` and `--no-session-persistence` (the operator's hooks, plugins, skills and settings stay out, and runs leave no sessions behind); and a neutral temp cwd, so no project memory leaks in. The model is pinned via `--model` (default `sonnet`); keep it, and `--max-turns` (default 12), fixed across releases for comparable numbers. `--timeout-sec` (default 300) bounds each run; `--out` overrides the summary directory.
 
 Metrics, per task and overall:
 
@@ -40,12 +40,14 @@ Metrics, per task and overall:
 
 What it pins:
 
-- **The error-envelope contract**: every tool failure parses as `{error, message, retriable, account}` and carries a `hint` (the 6.0.0 hint floor). Free-text errors are a contract break.
+- **The error-envelope contract**: every tool failure parses as `{error, message, retriable, account}` and carries a `hint` (the hint floor). Free-text errors are a contract break.
+- **Validation**: missing required arguments and unknown account aliases fail visibly with the same envelope.
 - **Coercion**: string-encoded numbers/booleans from clients must coerce, never fail validation.
 - **Graceful dispatch**: curated tools resolve in curated mode; hidden tools stay callable.
 - **Discovery behavior**: catalog shape, query filtering, the no-match hint, expand/collapse.
 - **Escape hatch**: unknown-api and ambiguous-alias responses (network-free paths only; Discovery-doc fetches stay out of CI).
 - **Write-control**: a write under `read-only` returns `write_disabled` with the enable hint.
+- **Account management**: `account_add` refuses in env-registry mode and names the migration path; `account_reauth` with an unknown alias lists the known ones.
 
 Constraints (measured, not guessed): promptfoo only calls tools present in `tools/list`, so the suite MUST run `GOOGLE_DISCOVERY=curated`; promptfoo requires Node >= 22.22; `PROMPTFOO_DISABLE_UPDATE=1` avoids a version check that can hang for minutes. The pinned promptfoo version lives in the `eval:contract` npm script.
 

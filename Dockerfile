@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# B16 + P3: distroless Node 22, non-root, single-file esbuild bundle. The
+# Distroless Node 22, non-root, single-file esbuild bundle. The
 # runtime carries the 6 MB bundle instead of ~70 MB of node_modules; the only
 # module kept on disk is @napi-rs/keyring (native, external to the bundle —
 # harmless here: no D-Bus means key provisioning falls back to the 0600 file
@@ -25,7 +25,7 @@ ENV NODE_ENV=production
 # Expose it through a tunnel that shares the container's network namespace
 # (compose `network_mode: "service:mcp"`) or a TLS reverse proxy on an internal
 # network with MCP_HTTP_HOST=0.0.0.0 (deploy/compose.yaml caddy profile); the
-# OAuth AS (Bearer auth + Host/Origin guard, B13) fronts every request. Never
+# OAuth AS (Bearer auth + Host/Origin guard) fronts every request. Never
 # publish the port itself on a routable host interface.
 ENV MCP_TRANSPORT=http
 COPY --from=build /app/bundle/index.js ./dist/index.js

@@ -1,4 +1,4 @@
-// B19: encrypted registry export / import (account-registry.md). Moves a whole
+// Encrypted registry export / import. Moves a whole
 // setup to another machine. The bundle is encrypted under a user PASSPHRASE
 // (portable across machines with different MASTER_KEYs) via the token-store AES
 // primitives; the bundled <alias>.enc token files stay encrypted under the
@@ -13,7 +13,7 @@ import { atomicWriteFileSync, atomicWriteWithLock } from './fs-atomic.js';
 import { ALIAS_RE, configFilePath, CONFIG_VERSION, tenantsDir } from './config-file.js';
 import { getTokenDir } from './accounts.js';
 
-/** D11 (refuse-only for v1): export/import operate on the FLAT single-owner
+/** Refuse-only for v1: export/import operate on the FLAT single-owner
  * store. A tenant-namespaced layout means the bundle would either miss every
  * tenant's tokens or exfiltrate all of them in one file — refuse instead.
  * Returns the offending dir, or null when the store is flat. */

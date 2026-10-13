@@ -142,7 +142,7 @@ describe('unknown tool name', () => {
   });
 });
 
-describe('unknown tool name: hint provider routing (H3)', () => {
+describe('unknown tool name: hint provider routing', () => {
   afterEach(() => setHintProvider(null));
 
   function echo() {

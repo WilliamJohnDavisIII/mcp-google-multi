@@ -31,7 +31,7 @@ export interface AccountSet {
   // May be empty: a fresh install has zero accounts, and the bootstrap /
   // diagnostic CLIs (doctor, reset, account import, migrate-config, config
   // check) must run on it. The SERVER refuses to boot empty — see
-  // assertServerAccountsConfigured (BR-4).
+  // assertServerAccountsConfigured.
   aliases: string[];
   configs: Record<string, AccountConfig>;
   scopeProfiles: Record<string, ScopeProfile>;
@@ -119,7 +119,7 @@ function noAccountsMessage(): string {
 }
 
 /**
- * Registry resolution (BR-2): a non-empty GOOGLE_ACCOUNTS env takes the WHOLE
+ * Registry resolution: a non-empty GOOGLE_ACCOUNTS env takes the WHOLE
  * registry from env (12-factor override, never merged key-by-key); otherwise
  * the registry comes from config.json. GOOGLE_ADMIN_ACCOUNTS, when NON-EMPTY,
  * overrides per-account admin flags from the file (env var > config field);
@@ -146,7 +146,7 @@ export function resolveAccounts(
 
   // Validate the legacy global override AT BOOT, whatever GOOGLE_TOOLSETS
   // selects — otherwise a typo only surfaces at dispatch time inside
-  // account_list instead of the promised startup error (BR3).
+  // account_list instead of the promised startup error.
   const legacyNames = parseCsv(env.GOOGLE_OPTIONAL_SCOPES);
   if (legacyNames.length > 0) {
     for (const bundle of resolveBundleAliases(legacyNames)) {
@@ -198,9 +198,9 @@ export function resolveAccounts(
     // Gap #23: an empty registry is NOT fatal at resolve time — the bootstrap and
     // diagnostic CLIs (doctor/reset/account import/migrate-config/config check)
     // must run on a fresh install. Only the stdio/http SERVER refuses to boot
-    // empty (BR-4), enforced by assertServerAccountsConfigured() in index.ts.
+    // empty, enforced by assertServerAccountsConfigured() in index.ts.
     // The dispatch-path reload ('throw') still throws so a mid-session emptied
-    // config.json keeps the last-good registry (BR-7) instead of dropping tools.
+    // config.json keeps the last-good registry instead of dropping tools.
     if (onInvalid === 'throw' && !opts.emptyOk) {
       throw new Error(`E_NO_ACCOUNTS_CONFIGURED: ${noAccountsMessage()}`);
     }
@@ -213,7 +213,7 @@ export function resolveAccounts(
     };
   }
 
-  // BR3: unknown bundle names fail loudly (a mis-scoped token is worse than a
+  // Unknown bundle names fail loudly (a mis-scoped token is worse than a
   // clear error); v5 silently filtered them. Null prototype: profile names are
   // user input and must never collide with Object.prototype members.
   const scopeProfiles: Record<string, ScopeProfile> = Object.create(null);
@@ -268,7 +268,7 @@ export function resolveAccounts(
   };
 }
 
-/** A2: env GOOGLE_DEFAULT_ACCOUNT > config.defaultAccount > unset. A configured
+/** env GOOGLE_DEFAULT_ACCOUNT > config.defaultAccount > unset. A configured
  * default naming an unknown alias refuses to start (E_DEFAULT_ACCOUNT_UNKNOWN —
  * deliberately NOT E_CONFIG_INVALID: the config is schema-valid). */
 function resolveDefaultAccount(
@@ -297,7 +297,7 @@ export function fileStamp(filePath: string, version: number): string {
   }
 }
 
-// First-run shim (BC6): env is set and no config.json exists yet — materialize
+// First-run shim: env is set and no config.json exists yet — materialize
 // the file so the wizard has something to edit. Env still wins this session;
 // a write failure must never block boot (warn on stderr and continue).
 function materializeFirstRun(
@@ -347,7 +347,7 @@ export function invalidateAccountSet(): AccountSet {
 }
 
 /**
- * Dispatch-path reload (BR-7): NEVER exits and never throws — a mid-edit,
+ * Dispatch-path reload: NEVER exits and never throws — a mid-edit,
  * corrupt, or deleted config.json keeps the last-good set and warns once per
  * distinct failure on stderr. failStartup semantics are boot/CLI-only.
  */
@@ -366,7 +366,7 @@ export function refreshAccountSetIfStale(): void {
   }
 }
 
-/** Cross-process staleness probe (BR-7): one stat, compared against the stamp. */
+/** Cross-process staleness probe: one stat, compared against the stamp. */
 export function isAccountSetStale(): boolean {
   if (current.source !== 'file') return false;
   const [version] = current.stamp.split(':');
@@ -393,7 +393,7 @@ export function unknownAliasMessage(aliases: readonly string[], selectors = fals
  * The `account` param schema, empty-registry-safe. A `z.enum` requires at least
  * one value, so a fresh install (zero aliases) would throw at schema-build time
  * (module load) and take down every CLI — including `doctor`, which is meant to
- * REPORT the empty registry (gap #23). Fall back to a plain string when there
+ * REPORT the empty registry. Fall back to a plain string when there
  * are no aliases: no alias exists to enumerate, the server refuses to boot empty
  * anyway, and dispatch validates the account against the live set. */
 export function accountAliasSchemaFor(aliases: readonly string[]): z.ZodType<string> {
@@ -440,7 +440,7 @@ export function isLiveAccountField(field: unknown): boolean {
 }
 
 /**
- * BR-4: the stdio/http SERVER never boots with an empty registry — a fresh user
+ * The stdio/http SERVER never boots with an empty registry — a fresh user
  * bootstraps via env / `migrate-config` / `account import` / `auth` first. The
  * bootstrap and diagnostic CLIs return before this guard, so it gates only the
  * server path (called from index.ts after the CLI branches). */

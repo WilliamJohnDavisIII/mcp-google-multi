@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { signAccessToken, jwtSecretFrom, signReauthLink } from '../src/mcp-token.js';
 
-// S1.23: the ONE multi-process smoke. Every other HTTP test drives
+// The ONE multi-process smoke. Every other HTTP test drives
 // HttpTransportHost in-process; the real index.ts HTTP bootstrap (env gates ->
 // owner gate -> JWT key provisioning -> AS mounting -> listener) had never
 // been exercised end to end. No network leaves the box: the test signs its own
@@ -59,7 +59,7 @@ function request(
   });
 }
 
-describe('index.ts HTTP bootstrap smoke (S1.23, subprocess)', () => {
+describe('index.ts HTTP bootstrap smoke (subprocess)', () => {
   let child: ChildProcess | undefined;
   let home: string | undefined;
 
