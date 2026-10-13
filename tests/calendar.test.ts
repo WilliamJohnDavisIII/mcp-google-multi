@@ -129,6 +129,20 @@ describe('calendar_respond_event', () => {
     expect(h.requests().some((r) => (r.method ?? 'GET').toUpperCase() === 'PATCH')).toBe(false);
   });
 
+  it('sends the chosen response status and comment in the patch body', async () => {
+    const h = toolHarness({ respond: () => eventWithSelf });
+    const res = await h.call('calendar_respond_event', {
+      account: 'test',
+      eventId: 'e1',
+      response: 'declined',
+      comment: 'cannot make it',
+    });
+    expect(res.isError).toBeFalsy();
+    const patch = h.requests().find((r) => (r.method ?? 'GET').toUpperCase() === 'PATCH');
+    const body = (patch as GoogleRequest).data as { attendees?: unknown[] };
+    expect(body.attendees).toEqual([{ email: 'me@harness.example', responseStatus: 'declined', comment: 'cannot make it' }]);
+  });
+
   it('is gated by write-control like any other update', async () => {
     const h = toolHarness({ respond: () => eventWithSelf, policy: { profile: 'read-only', readOnly: true } });
     const res = await h.call('calendar_respond_event', { account: 'test', eventId: 'e1', response: 'tentative' });
