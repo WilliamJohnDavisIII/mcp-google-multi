@@ -7,6 +7,7 @@ import { resolveAccounts, invalidateAccountSet } from '../src/accounts.js';
 import { ToolRegistry } from '../src/registry.js';
 import { setHintProvider } from '../src/hint-provider.js';
 import type { Policy } from '../src/write-control.js';
+import { accountSet, toolHarness, parseResult } from './_tool-harness.js';
 
 const POLICY: Policy = { profile: 'full-writes', readOnly: false, allow: [], deny: [] };
 
@@ -101,10 +102,11 @@ describe('withDefaultAccount injection matrix (single dispatch site)', () => {
     const payload = JSON.parse((res as { content: { text: string }[] }).content[0].text);
     expect(payload.error).toBe('E_NO_DEFAULT_ACCOUNT');
     expect(payload.hint).toContain('GOOGLE_DEFAULT_ACCOUNT');
+    expect(payload.hint).toContain('test=test@example.com');
     expect((res as { isError: boolean }).isError).toBe(true);
   });
 
-  it('a hint provider renders no_default_account with the registry aliases', async () => {
+  it('a hint provider renders no_default_account with alias=email pairs', async () => {
     const seen: unknown[] = [];
     setHintProvider({
       render: (c) => {
@@ -116,7 +118,7 @@ describe('withDefaultAccount injection matrix (single dispatch site)', () => {
       const { res } = await callWith(undefined, {});
       const payload = JSON.parse((res as { content: { text: string }[] }).content[0].text);
       expect(payload.hint).toBe('kind:no_default_account');
-      expect(seen).toEqual([{ kind: 'no_default_account', aliases: ['test'] }]);
+      expect(seen).toEqual([{ kind: 'no_default_account', accounts: [{ alias: 'test', email: 'test@example.com' }] }]);
     } finally {
       setHintProvider(null);
     }
@@ -149,5 +151,17 @@ describe('withDefaultAccount injection matrix (single dispatch site)', () => {
     reg.registerTool('util_probe', { description: 'x', inputSchema: { q: z.string() } }, async () => ({ content: [{ type: 'text' as const, text: '"ok"' }] }));
     const res = await registered({ q: 'x' });
     expect((res as { isError?: boolean }).isError).toBeUndefined();
+  });
+});
+
+describe('E_NO_DEFAULT_ACCOUNT through a real tool call', () => {
+  it('the hint lists every alias=email pair, not just aliases', async () => {
+    const { call } = toolHarness({
+      accounts: accountSet({ work: { email: 'work@example.com' }, home: { email: 'home@example.com' } }),
+    });
+    const res = parseResult(await call('gmail_search', { query: 'x' }));
+    expect(res.error).toBe('E_NO_DEFAULT_ACCOUNT');
+    expect(res.hint).toContain('work=work@example.com');
+    expect(res.hint).toContain('home=home@example.com');
   });
 });

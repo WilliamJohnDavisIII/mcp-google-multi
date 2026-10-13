@@ -17,7 +17,7 @@ export type HintCase =
   | { kind: 'write_denied'; tool: { name: string; service: string; cud: string }; reason: DenyReason; policy: Policy }
   | { kind: 'policy_summary'; policy: Policy }
   | { kind: 'outbound_denied'; what: string; blocked: string[]; entries: string[] }
-  | { kind: 'no_default_account'; aliases: string[] }
+  | { kind: 'no_default_account'; accounts: { alias: string; email: string }[] }
   | { kind: 'no_accounts' }
   | { kind: 'api_not_enabled'; api?: string; service?: string; project?: string; googleMessage: string }
   | { kind: 'apis_disabled'; services: { service: string; api: string }[] }

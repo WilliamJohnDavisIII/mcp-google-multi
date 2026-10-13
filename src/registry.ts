@@ -258,8 +258,10 @@ export class ToolRegistry {
             refreshAccountSetIfStale();
             const def = this.accounts().defaultAccount;
             if (!def) {
-              const aliases = this.accounts().aliases;
-              const rendered = hints()?.render({ kind: 'no_default_account', aliases });
+              const accountSet = this.accounts();
+              const accounts = accountSet.aliases.map((alias) => ({ alias, email: accountSet.configs[alias]?.email ?? '' }));
+              const rendered = hints()?.render({ kind: 'no_default_account', accounts });
+              const pairs = accounts.map((a) => `${a.alias}=${a.email}`).join(', ');
               return {
                 content: [
                   {
@@ -267,7 +269,7 @@ export class ToolRegistry {
                     text: JSON.stringify({
                       error: 'E_NO_DEFAULT_ACCOUNT',
                       message: 'No "account" given and no default account is configured.',
-                      hint: rendered?.hint ?? `Pass account explicitly (valid: ${aliases.join(', ')}), or set GOOGLE_DEFAULT_ACCOUNT / "defaultAccount" in config.json.`,
+                      hint: rendered?.hint ?? `Pass account explicitly (valid: ${pairs}), or set GOOGLE_DEFAULT_ACCOUNT / "defaultAccount" in config.json.`,
                       retriable: false,
                     }),
                   },
