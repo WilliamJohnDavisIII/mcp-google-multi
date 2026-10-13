@@ -209,6 +209,13 @@ export async function resolveReply(
   };
 }
 
+// Gmail's after:/before: operators take epoch seconds; Date.parse accepts both
+// an ISO date and a full date-time, so one parse covers both input shapes.
+function parseEpochSeconds(value: string): number | null {
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+}
+
 const BODY_CAP_CHARS = 50_000;
 // gmail_read_batch aggregate ceiling: bounds the summed serialized output so a
 // 100-message batch can't blow the context window (per-message bodies are capped at BODY_CAP_CHARS first).
@@ -486,16 +493,21 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
     {
       description:
         'Search messages in a Gmail account. Returns compact rows (id, from, subject, date, snippet); ' +
-        'pass full=true for threadId, to, labelIds and the untruncated snippet.',
+        'pass full=true for threadId, to, labelIds and the untruncated snippet. ' +
+        'For a recurring "what is new" sweep, prefer gmail_list_history over polling this with since.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
         query: z.string().describe('Gmail search syntax, e.g. "from:alice is:unread"'),
         maxResults: coerceNumber(z.number().min(1).max(100)).optional()
           .describe('Max results to return (default: 20, max: 100)'),
         full: coerceBoolean.optional().describe('Return the full row shape instead of the compact default'),
+        since: z.string().optional()
+          .describe('Only messages on/after this ISO 8601 date or date-time, added to the query as after:<epoch seconds>'),
+        until: z.string().optional()
+          .describe('Only messages before this ISO 8601 date or date-time, added to the query as before:<epoch seconds>'),
       },
     },
-    async ({ account, query, maxResults, full }) => {
+    async ({ account, query, maxResults, full, since, until }) => {
       try {
         // Gmail treats a blank `q` as no filter, so a caller passing an unset
         // variable got the whole mailbox back as if it had matched.
@@ -506,12 +518,35 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
             'Pass a real Gmail search term such as "is:unread" or "from:someone@example.com". Returning the whole mailbox for a blank query would look like a successful search.',
           );
         }
+        let effectiveQuery = query;
+        if (since !== undefined) {
+          const epoch = parseEpochSeconds(since);
+          if (epoch === null) {
+            return invalidParams(
+              account as Account,
+              `\`since\` is not a parsable ISO 8601 date or date-time: "${since}".`,
+              'Pass an ISO 8601 date (e.g. "2026-01-01") or date-time (e.g. "2026-01-01T00:00:00Z").',
+            );
+          }
+          effectiveQuery = `${effectiveQuery} after:${epoch}`;
+        }
+        if (until !== undefined) {
+          const epoch = parseEpochSeconds(until);
+          if (epoch === null) {
+            return invalidParams(
+              account as Account,
+              `\`until\` is not a parsable ISO 8601 date or date-time: "${until}".`,
+              'Pass an ISO 8601 date (e.g. "2026-01-01") or date-time (e.g. "2026-01-01T00:00:00Z").',
+            );
+          }
+          effectiveQuery = `${effectiveQuery} before:${epoch}`;
+        }
         const auth = await getClientFn(account as Account);
         const gmail = gmailClient({ version: 'v1', auth });
 
         const listRes = await gmail.users.messages.list({
           userId: 'me',
-          q: query,
+          q: effectiveQuery,
           maxResults: maxResults ?? 20,
         });
 
