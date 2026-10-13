@@ -6,6 +6,7 @@ import { buildScopesReport, type ScopesReport } from '../scope-observability.js'
 import { getAdminAccounts, resolveScopesForAccount } from '../auth.js';
 import { hasToken, readToken, type TokenStore } from '../token-store.js';
 import { hints } from '../hint-provider.js';
+import { coerceBoolean } from './_coerce.js';
 
 export interface AccountHealthDeps {
   hasToken: (alias: string) => boolean;
@@ -127,26 +128,45 @@ export function deriveAccountHealth(alias: string, deps: AccountHealthDeps = DEF
   };
 }
 
+export interface AccountSummary {
+  alias: string;
+  email: string;
+  admin: boolean;
+  tokenStatus: TokenStatus;
+  default: boolean;
+}
+
+function summarizeAccountHealth(health: AccountHealth, isDefault: boolean): AccountSummary {
+  return {
+    alias: health.alias,
+    email: health.email,
+    admin: health.admin,
+    tokenStatus: health.token.status,
+    default: isDefault,
+  };
+}
+
 export function registerAccountTools(registry: ToolRegistry, deps: AccountHealthDeps = DEFAULT_DEPS): void {
   const registerMeta = registry.registerMeta as unknown as (
     name: string,
     config: { description: string; inputSchema: Record<string, unknown>; _meta?: Record<string, unknown> },
-    handler: () => unknown,
+    handler: (args: { verbose?: boolean }) => unknown,
   ) => void;
   registerMeta(
     'account_list',
     {
       description:
-        'List the configured Google accounts: alias, email, admin flag, token health ' +
-        '(ok / expired_refreshable / needs_reauth / missing / decrypt_error), and granted vs configured scopes. ' +
-        'Use this to see which account aliases are available and healthy.',
-      inputSchema: {},
+        'List the configured Google accounts: alias, email, admin flag, token status ' +
+        '(ok / expired_refreshable / needs_reauth / missing / decrypt_error), and which one is the default. ' +
+        'Pass verbose: true for the full per-account report (granted vs configured scopes).',
+      inputSchema: { verbose: coerceBoolean.optional().describe('Return the full scope report instead of the terse default') },
       _meta: { 'anthropic/alwaysLoad': true },
     },
-    async () => {
+    async ({ verbose }) => {
       refreshAccountSetIfStale();
       const set = registry.accountSet();
       const health: AccountHealthDeps = { ...deps, accounts: () => set };
+      const reports = set.aliases.map((alias) => deriveAccountHealth(alias, health));
       return {
         content: [
           {
@@ -154,7 +174,7 @@ export function registerAccountTools(registry: ToolRegistry, deps: AccountHealth
             text: JSON.stringify({
               defaultAccount: set.defaultAccount ?? null,
               defaultAccountSource: set.defaultAccountSource ?? null,
-              accounts: set.aliases.map((alias) => deriveAccountHealth(alias, health)),
+              accounts: verbose ? reports : reports.map((r) => summarizeAccountHealth(r, r.alias === set.defaultAccount)),
             }),
           },
         ],

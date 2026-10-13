@@ -87,16 +87,24 @@ describe('registerDiscoverTools', () => {
     expect(server.sendToolListChanged).toHaveBeenCalledTimes(1);
   });
 
-  it('discover filters by query and hints when nothing matches', async () => {
+  it('next text says to call the tool by exact name, not that it is "now listed and callable"', async () => {
+    const { registered } = setup();
+    const gmail = registered.find((r) => r.name === 'gmail_discover')!;
+    const payload = JSON.parse((await gmail.handler({ query: undefined })).content[0].text);
+    expect(payload.next).not.toContain('is now listed and callable');
+    expect(payload.next).toContain('exact name');
+    expect(payload.next).toContain('tool-search');
+  });
+
+  it('discover filters by query and falls back to a full one-line listing when nothing matches', async () => {
     const { registered } = setup();
     const gmail = registered.find((r) => r.name === 'gmail_discover')!;
 
     const filtered = JSON.parse((await gmail.handler({ query: 'send' })).content[0].text);
     expect(filtered.operations.map((o: { tool: string }) => o.tool)).toEqual(['gmail_send']);
 
-    const empty = JSON.parse((await gmail.handler({ query: 'zzz' })).content[0].text);
-    expect(empty.operations).toEqual([]);
-    expect(empty.next).toContain('without query');
+    const fallback = JSON.parse((await gmail.handler({ query: 'zzz' })).content[0].text);
+    expect(fallback.operations.map((o: { tool: string }) => o.tool)).toEqual(['gmail_search', 'gmail_send']);
   });
 
   it('a hint provider renders writeControl via kind policy_summary', async () => {

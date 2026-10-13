@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { z } from 'zod';
-import { inferCud, ToolRegistry } from '../src/registry.js';
+import { inferCud, ToolRegistry, firstSentence } from '../src/registry.js';
 import { setHintProvider } from '../src/hint-provider.js';
 import type { Policy } from '../src/write-control.js';
 
@@ -51,6 +51,41 @@ describe('inferCud', () => {
   it('does not confuse "shared" with the "share" verb', () => {
     expect(inferCud('drive_shared_drives_list')).toBe('read');
     expect(inferCud('drive_share')).toBe('create');
+  });
+});
+
+describe('firstSentence', () => {
+  const cases: [string, string][] = [
+    // Simple single sentence - unchanged
+    ['One.', 'One.'],
+    // Two sentences - cuts at first period-space
+    ['One. Two.', 'One.'],
+    // E.g. abbreviation - does not cut
+    ['Get a record by name (e.g. conferenceRecords/abc). More text.', 'Get a record by name (e.g. conferenceRecords/abc).'],
+    // I.e. abbreviation - does not cut
+    ['Item (i.e. the first one). More text.', 'Item (i.e. the first one).'],
+    // Etc. abbreviation - does not cut
+    ['Multiple formats (etc.). More text.', 'Multiple formats (etc.).'],
+    // Vs. abbreviation - does not cut
+    ['Compare A vs. B. More text.', 'Compare A vs. B.'],
+    // Case insensitive - E.G. vs e.g.
+    ['Test (E.G. example). More.', 'Test (E.G. example).'],
+    // Period inside parenthesis - does not cut
+    ['Get a value (min. 1). More text.', 'Get a value (min. 1).'],
+    // No valid cut - returns whole text
+    ['Just one sentence without period.', 'Just one sentence without period.'],
+    // No period at all
+    ['No period here', 'No period here'],
+    // Multiple periods inside parens
+    ['Foo (bar. baz. qux). Next.', 'Foo (bar. baz. qux).'],
+    // Nested parens
+    ['Example (see (nested. case)). Next.', 'Example (see (nested. case)).'],
+    // Mixed abbreviations
+    ['Get item (e.g. foo). Get it (i.e. now). Done.', 'Get item (e.g. foo).'],
+  ];
+
+  it.each(cases)('%s → %s', (input, expected) => {
+    expect(firstSentence(input)).toBe(expected);
   });
 });
 
@@ -189,7 +224,33 @@ describe('ToolRegistry', () => {
       { tool: 'drive_search', summary: 'Search files', args: ['account'], cud: 'read' },
     ]);
     expect(reg.catalog('drive', 'upload').map((o) => o.tool)).toEqual(['drive_upload']);
-    expect(reg.catalog('drive', 'nothing-matches')).toEqual([]);
+    // No token matches anything: fall back to the full listing rather than an empty result.
+    expect(reg.catalog('drive', 'nothing-matches')).toEqual([
+      { tool: 'drive_upload', summary: 'Upload a file to Drive', args: ['account', 'path'], cud: 'create' },
+      { tool: 'drive_search', summary: 'Search files', args: ['account'], cud: 'read' },
+    ]);
+  });
+
+  it('tokenizes a multi-word query, OR-matches tokens, and ranks by matched token count', () => {
+    const { server } = fakeServer();
+    const reg = new ToolRegistry(server as never, FULL_WRITES);
+    reg.registerTool('drive_upload', { description: 'Upload a file to Drive', inputSchema: { account: z.string() } }, () => {});
+    reg.registerTool('drive_search', { description: 'Search files', inputSchema: { account: z.string() } }, () => {});
+    // "file" hits both (upload's description, search's "files"); "upload" only hits drive_upload.
+    expect(reg.catalog('drive', 'file upload').map((o) => o.tool)).toEqual(['drive_upload', 'drive_search']);
+  });
+
+  it('a no-match fallback lists every op with a one-line summary, not the full description', () => {
+    const { server } = fakeServer();
+    const reg = new ToolRegistry(server as never, FULL_WRITES);
+    reg.registerTool(
+      'drive_export',
+      { description: 'Export a file to another format. Supports Docs, Sheets and Slides.', inputSchema: { account: z.string() } },
+      () => {},
+    );
+    const result = reg.catalog('drive', 'zzz-nope');
+    expect(result.map((o) => o.tool)).toEqual(['drive_export']);
+    expect(result[0].summary).toBe('Export a file to another format.');
   });
 
   it('reveal notifies once per service and flips visibility', () => {

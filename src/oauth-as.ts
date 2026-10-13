@@ -566,7 +566,7 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
         `<!doctype html><meta charset=utf-8><title>Authorize access</title>` +
           `<body style="font-family:system-ui,sans-serif;max-width:36em;margin:3em auto;line-height:1.5">` +
           `<h2>Authorize access?</h2>` +
-          `<p>A newly-registered application (<code>${escapeHtml(clientId)}</code>) is requesting access to your Google Workspace through this server.</p>` +
+          `<p>An application (<code>${escapeHtml(clientId)}</code>) asks to connect to this server as you.</p>` +
           `<p>If approved, it will receive an authorization redirected to:<br><code>${escapeHtml(redirectUri)}</code></p>` +
           `<p><strong>If you did not start this, close this window.</strong></p>` +
           `<form method="POST" action="/authorize"><input type="hidden" name="pending" value="${escapeHtml(pendingToken)}">` +
@@ -634,7 +634,7 @@ export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps =
       }
       log(`callback ok flow=alias_add alias=${logSafe(st.alias, 64)}`);
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(`<!doctype html><meta charset=utf-8><p>Connected "${escapeHtml(st.alias)}". You can close this window and retry your request.</p>`);
+      res.end(`<!doctype html><meta charset=utf-8><p>Linked "${escapeHtml(st.alias)}" to this server. Start a new chat to use it.</p>`);
       return true;
     }
 

@@ -409,6 +409,8 @@ describe('negative paths (one per spec MUST)', () => {
     expect(authz.headers['content-type']).toContain('text/html');
     expect(authz.text).toContain('attacker.example');
     expect(authz.text).toContain('name="pending"');
+    expect(authz.text).toContain('asks to connect to this server as you');
+    expect(authz.text).not.toContain('requesting access to your Google Workspace');
     const pending = authz.text.match(/name="pending" value="([^"]+)"/)![1];
     const approved = await req(port, 'POST', '/authorize', { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ pending }).toString() });
     expect(approved.status).toBe(302);
@@ -1295,7 +1297,8 @@ describe('alias_add flow + resolveSubject seam', () => {
     const googleState = stateFrom(authz.headers.location as string);
     const cb = await req(port, 'GET', `/callback?code=member-code&state=${encodeURIComponent(googleState)}`);
     expect(cb.status).toBe(200);
-    expect(cb.text).toContain('Connected "work"');
+    expect(cb.text).toContain('Linked "work"');
+    expect(cb.text).toContain('Start a new chat');
     expect(binds).toHaveLength(1);
     expect(binds[0]).toMatchObject({ tenantId: 'tenant-a', alias: 'work', email: 'member@x.example', bundles: ['forms'] });
     // exactly one bind, under exactly the minted tenant - no sibling writes

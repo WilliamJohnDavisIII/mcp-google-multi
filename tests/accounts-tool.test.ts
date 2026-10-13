@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { deriveAccountHealth, type AccountHealthDeps } from '../src/tools/accounts-tool.js';
+import { accountHealthDepsFor, deriveAccountHealth, type AccountHealthDeps } from '../src/tools/accounts-tool.js';
 import { setHttpReauthLink } from '../src/reauth-hint.js';
 import { setHintProvider, type HintCase } from '../src/hint-provider.js';
 import { resolveScopesForAccount } from '../src/auth.js';
+import { accountSet, parseResult, toolHarness } from './_tool-harness.js';
 
 const ALIAS = 'test';
 const CONFIGURED = resolveScopesForAccount(ALIAS);
@@ -152,5 +153,33 @@ describe('deriveAccountHealth hint provider routing', () => {
     );
     expect(h.token.hint).toBe('kind:scopes_missing');
     expect(seen).toEqual([{ kind: 'scopes_missing', account: ALIAS }]);
+  });
+});
+
+describe('account_list (registered tool)', () => {
+  const ACCOUNTS = accountSet(
+    { work: { email: 'work@example.com', admin: true }, home: { email: 'home@example.com' } },
+    { defaultAccount: 'work' },
+  );
+
+  it('is terse by default: alias, email, admin, token status, default flag only', async () => {
+    const { call } = toolHarness({ accounts: ACCOUNTS });
+    const payload = parseResult(await call('account_list', {}));
+    expect(payload.accounts).toEqual([
+      { alias: 'work', email: 'work@example.com', admin: true, tokenStatus: 'ok', default: true },
+      { alias: 'home', email: 'home@example.com', admin: false, tokenStatus: 'ok', default: false },
+    ]);
+  });
+
+  it('verbose: true is byte-identical to deriveAccountHealth\'s own report', async () => {
+    const { call, ctx } = toolHarness({ accounts: ACCOUNTS });
+    const health = accountHealthDepsFor(ctx.tokenStore, () => ACCOUNTS);
+    const expected = ACCOUNTS.aliases.map((alias) => deriveAccountHealth(alias, health));
+    const payload = parseResult(await call('account_list', { verbose: true }));
+    expect(payload).toEqual({
+      defaultAccount: 'work',
+      defaultAccountSource: 'config',
+      accounts: expected,
+    });
   });
 });
