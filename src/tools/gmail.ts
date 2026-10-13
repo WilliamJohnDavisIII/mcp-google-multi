@@ -505,9 +505,11 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
           .describe('Only messages on/after this ISO 8601 date or date-time, added to the query as after:<epoch seconds>'),
         until: z.string().optional()
           .describe('Only messages before this ISO 8601 date or date-time, added to the query as before:<epoch seconds>'),
+        includeSpamTrash: coerceBoolean.optional()
+          .describe('Include Spam and Trash in the search. Gmail excludes both by default, even for in:anywhere.'),
       },
     },
-    async ({ account, query, maxResults, full, since, until }) => {
+    async ({ account, query, maxResults, full, since, until, includeSpamTrash }) => {
       try {
         // Gmail treats a blank `q` as no filter, so a caller passing an unset
         // variable got the whole mailbox back as if it had matched.
@@ -548,6 +550,7 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
           userId: 'me',
           q: effectiveQuery,
           maxResults: maxResults ?? 20,
+          ...(includeSpamTrash !== undefined ? { includeSpamTrash } : {}),
         });
 
         const messages = listRes.data.messages ?? [];
