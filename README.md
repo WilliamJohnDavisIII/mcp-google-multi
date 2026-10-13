@@ -44,7 +44,7 @@ New to all this? It's written for someone who just installed Claude Code and has
 5. **Add it to Claude Code, then restart Claude Code:**
 
    ```bash
-   claude mcp add google-multi -s user -- npx -y mcp-google-multi
+   claude mcp add mcp-google-multi -s user -- npx -y mcp-google-multi
    ```
 
 **Stuck at any point? Run `mcp-google-multi doctor`.** It inspects every part and prints the exact fix for anything wrong (a missing sign-in, a Google API you still need to switch on, and so on). Once it reads all-green, just talk to Claude: *"summarize my unread email."*
@@ -55,14 +55,14 @@ New to all this? It's written for someone who just installed Claude Code and has
 
 **Go deeper:** [Configuration reference](./docs/configuration.md) · [What's covered](./COVERAGE.md) · [Features tour](./docs/features.md) · [Remote / HTTP setup](./docs/http-setup.md) · [Secrets in a vault](./docs/secrets.md) · [Local usage metrics](./docs/usage-metrics.md) · [Migrating to v6](./MIGRATION-v6.md) · [Security policy](./SECURITY.md) · [Roadmap](https://github.com/bakissation/mcp-google-multi/milestones)
 
-## Maintainer & credits
+## Maintainer, sponsor & license
 
 Built and maintained by **Abdelbaki Berkati** — [berkati.xyz](https://berkati.xyz) · [@bakissation](https://github.com/bakissation). [Read the case study →](https://berkati.xyz/case-studies/mcp-google-multi/)
 
 Development is **funded by [IdeaCrafters](https://ideacrafters.com)** ([@IdeaCraftersHQ](https://github.com/IdeaCraftersHQ)) — the studio that pays for this OSS to exist.
 
+An Enterprise Edition (hosted, multi-tenant) is available: ask through [berkati.xyz](https://berkati.xyz) (email or LinkedIn there).
+
 Thanks to contributors [@obatried](https://github.com/obatried), [@trevor-commits](https://github.com/trevor-commits), and [@mjreddy](https://github.com/mjreddy). The project is maintainer-led (roadmap on [Milestones](https://github.com/bakissation/mcp-google-multi/milestones); bug reports welcome, feature PRs by prior agreement — see [CONTRIBUTING.md](./CONTRIBUTING.md)). **Feedback shapes the roadmap: [open an issue](https://github.com/bakissation/mcp-google-multi/issues/new/choose) with bugs, pain points, or what you wish it did.** Security reports go to [SECURITY.md](./SECURITY.md), never a public issue.
 
-## License
-
-[MIT](./LICENSE)
+Licensed under [MIT](./LICENSE).
