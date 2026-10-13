@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { resolveHttpConfig } from '../src/http-config.js';
 import { HttpTransportHost } from '../src/http-transport.js';
 import { buildAuthServer, redirectAllowed, verifiedEmailFromIdToken, verifiedIdentityFromIdToken, DCR_MAX_CLIENTS, DCR_MAX_REDIRECT_URIS, type AuthServer, type AuthServerDeps } from '../src/oauth-as.js';
-import { jwtSecretFrom, signAccessToken, signPending, signReauthLink, verifyAccessToken, refreshFamilyTagger, RefreshStore, ReplayGuard } from '../src/mcp-token.js';
+import { jwtSecretFrom, signAccessToken, signPending, signReauthLink, verifyAccessToken, refreshFamilyTagger, RefreshStore, ReplayGuard, REPLAY_WINDOW_MS } from '../src/mcp-token.js';
 import { SsrfBlockedError } from '../src/ssrf-guard.js';
 import { CIMD_MAX_IN_FLIGHT } from '../src/cimd-cache.js';
 import { z } from "zod";
@@ -333,7 +333,9 @@ describe('negative paths (one per spec MUST)', () => {
     const code = await getCode(port);
     const tok = JSON.parse((await req(port, 'POST', '/token', form({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, code_verifier: verifier }))).text);
     await req(port, 'POST', '/token', form({ grant_type: 'refresh_token', refresh_token: tok.refresh_token }));
-    const reuse = await req(port, 'POST', '/token', form({ grant_type: 'refresh_token', refresh_token: tok.refresh_token }));
+    // A different user-agent: not the concurrent-duplicate case, genuine reuse.
+    const dup = form({ grant_type: 'refresh_token', refresh_token: tok.refresh_token });
+    const reuse = await req(port, 'POST', '/token', { ...dup, headers: { ...dup.headers, 'user-agent': 'another-client/1.0' } });
     expect(reuse.status).toBe(400);
     expect(JSON.parse(reuse.text).error).toBe('invalid_grant');
   });
@@ -1121,9 +1123,10 @@ describe('refresh lifetimes on AuthServerConfig', () => {
     expect(tok.status).toBe(200);
     return JSON.parse(tok.text).refresh_token;
   }
-  const refreshAt = async (port: number, atMs: number, refresh_token: string) => {
+  const refreshAt = async (port: number, atMs: number, refresh_token: string, userAgent?: string) => {
     off = atMs;
-    const r = await req(port, 'POST', '/token', form({ grant_type: 'refresh_token', refresh_token }));
+    const f = form({ grant_type: 'refresh_token', refresh_token });
+    const r = await req(port, 'POST', '/token', userAgent === undefined ? f : { ...f, headers: { ...f.headers, 'user-agent': userAgent } });
     return { status: r.status, body: JSON.parse(r.text) as Record<string, string> };
   };
   const expectInvalidGrant = (r: { status: number; body: Record<string, string> }) => {
@@ -1181,7 +1184,8 @@ describe('refresh lifetimes on AuthServerConfig', () => {
     const stolen = await signIn(port);
     const rotated = await refreshAt(port, 1_000, stolen);
     expect(rotated.status).toBe(200);
-    expectInvalidGrant(await refreshAt(port, 2_000, stolen));
+    // A different user-agent: not the concurrent-duplicate case, genuine reuse.
+    expectInvalidGrant(await refreshAt(port, 2_000, stolen, 'thief/1.0'));
     off = 0;
     const idle = await signIn(port);
     expectInvalidGrant(await refreshAt(port, 61_000, idle));
@@ -1198,6 +1202,54 @@ describe('refresh lifetimes on AuthServerConfig', () => {
       expect(logs.join('\n')).not.toContain(t.slice(3));
     }
     expect(lines.join('\n')).not.toMatch(/owner|@x\.example/);
+  });
+
+  it('the same retired token from the same client after the replay window is still reuse', async () => {
+    const port = await startWith({});
+    const rt = await signIn(port);
+    const winner = await refreshAt(port, 0, rt, 'same-client/1.0');
+    expect(winner.status).toBe(200);
+    // Same user-agent (and address, and client_id) as the winning rotation,
+    // but presented past REPLAY_WINDOW_MS: not a concurrent duplicate.
+    expectInvalidGrant(await refreshAt(port, REPLAY_WINDOW_MS + 1, rt, 'same-client/1.0'));
+    // The family is revoked: even the winner's own successor stops working.
+    expectInvalidGrant(await refreshAt(port, REPLAY_WINDOW_MS + 1, winner.body.refresh_token, 'same-client/1.0'));
+  });
+});
+
+describe('concurrent refresh duplicates', () => {
+  async function signedInRefreshToken(port: number): Promise<string> {
+    const authz = await req(port, 'GET', `/authorize?${authorizeQuery()}`);
+    const cb = await req(port, 'GET', `/callback?code=owner-code&state=${encodeURIComponent(stateFrom(authz.headers.location as string))}`);
+    const code = new URL(cb.headers.location as string).searchParams.get('code')!;
+    const tok = await req(port, 'POST', '/token', form({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, code_verifier: verifier }));
+    return JSON.parse(tok.text).refresh_token;
+  }
+  const refresh = (port: number, refresh_token: string, userAgent?: string) => {
+    const f = form({ grant_type: 'refresh_token', refresh_token });
+    return req(port, 'POST', '/token', userAgent === undefined ? f : { ...f, headers: { ...f.headers, 'user-agent': userAgent } });
+  };
+
+  it('two concurrent POSTs with the same token from one client both get 200 with the same refresh_token', async () => {
+    const port = await start();
+    const rt = await signedInRefreshToken(port);
+    const [a, b] = await Promise.all([refresh(port, rt, 'same-client/1.0'), refresh(port, rt, 'same-client/1.0')]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(JSON.parse(a.text).refresh_token).toBe(JSON.parse(b.text).refresh_token);
+  });
+
+  it('the same retired token from another user-agent is invalid_grant, and the family is gone', async () => {
+    const port = await start();
+    const rt = await signedInRefreshToken(port);
+    const winner = await refresh(port, rt, 'same-client/1.0');
+    expect(winner.status).toBe(200);
+    const loser = await refresh(port, rt, 'another-client/1.0');
+    expect(loser.status).toBe(400);
+    expect(JSON.parse(loser.text).error).toBe('invalid_grant');
+    // The family is revoked: even the winner's own successor no longer rotates.
+    const afterRevoke = await refresh(port, JSON.parse(winner.text).refresh_token, 'same-client/1.0');
+    expect(afterRevoke.status).toBe(400);
   });
 });
 

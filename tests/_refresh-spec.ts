@@ -43,6 +43,16 @@ export function specToken(masterKey: string, fid: Buffer, gen: number, opts: { r
 /** The decoded bytes of an r1 token. */
 export const r1Bytes = (token: string): Buffer => Buffer.from(token.slice(3), 'base64url');
 
+/** The token a rotation of `presentedToken` mints, independently of src/mcp-token.ts:
+ * generation + 1, random part = HMAC-SHA256(macKey, "...r1 successor\n" || presented body)[0..16]. */
+export function specSuccessor(masterKey: string, presentedToken: string): SpecToken {
+  const body = r1Bytes(presentedToken).subarray(0, 36);
+  const fid = body.subarray(0, 16);
+  const gen = body.readUInt32BE(16);
+  const rand = createHmac('sha256', specKey(masterKey)).update(Buffer.concat([Buffer.from('mcp-google-multi refresh r1 successor\n'), body])).digest().subarray(0, 16);
+  return specToken(masterKey, fid, gen + 1, { rand });
+}
+
 /** First 8 hex of sha256: a family id's bytes, or an earlier-release family id string. */
 export const specTag = (family: Buffer | string): string => createHash('sha256').update(family).digest('hex').slice(0, 8);
 
@@ -51,7 +61,7 @@ export const legacyTok = (label: string): string => createHash('sha256').update(
 
 export interface StoreFile {
   format?: number;
-  families: Record<string, { sub: string; gen: number; cur: string; createdAt: number; usedAt: number; legacy?: string }>;
+  families: Record<string, { sub: string; gen: number; cur: string; createdAt: number; usedAt: number; legacy?: string; by?: string }>;
   active: Record<string, { sub: string; issuedAt: number; family: string }>;
   spent: Record<string, string>;
 }

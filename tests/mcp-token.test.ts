@@ -19,13 +19,17 @@ import {
   RefreshStore,
   assertRefreshStoreReadable,
   refreshFamilyTagger,
+  clientFingerprint,
+  refreshMacKey,
+  REPLAY_WINDOW_MS,
   type RefreshStoreOptions,
   type StatePayload,
 } from '../src/mcp-token.js';
 import { withFileLock } from '../src/fs-atomic.js';
 import { decryptToken, encryptToken } from '../src/token-store.js';
 import { RefreshStore as PrevRefreshStore } from './fixtures/refresh-store-prev.js';
-import { legacyTok, onDisk, r1Bytes, seedFamilies, seedLegacy, specKey, specMac, specTag, specToken } from './_refresh-spec.js';
+import { RefreshStore as PrevReleaseRefreshStore } from './fixtures/refresh-store-prev-release.js';
+import { legacyTok, onDisk, r1Bytes, seedFamilies, seedLegacy, specKey, specMac, specSuccessor, specTag, specToken } from './_refresh-spec.js';
 
 /** Change one character in the middle of a JWT's signature; changing the last one can leave it
  * intact, since base64url ignores the final character's low bits (~1 run in 1,000 wouldn't tamper). */
@@ -533,12 +537,200 @@ describe('RefreshStore generations', () => {
       [any().fid]: fam('owner', 0, any().cur, { createdAt: null }),
       [any().fid]: fam('owner', 0, any().cur, { usedAt: '1000' }),
       [any().fid]: fam('owner', 0, any().cur, { legacy: 5 }),
+      [any().fid]: fam('owner', 0, any().cur, { by: 5 }),
     };
-    expect(Object.keys(bad)).toHaveLength(9);
+    expect(Object.keys(bad)).toHaveLength(10);
     seedFamilies(file, KEY, { ...bad, [good.fid]: fam('owner', 0, good.cur) });
     const r = s.rotate(good.token, 2000);
     expect(r!.sub).toBe('owner');
     expect(Object.keys(onDisk(file, KEY).families)).toEqual([good.fid]);
+  });
+});
+
+describe('RefreshStore concurrent-duplicate replay', () => {
+  const KEY = 'master-key-for-test';
+  let dir: string;
+  afterEach(() => dir && rmSync(dir, { recursive: true, force: true }));
+  const storeAt = () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'gm-replay-'));
+    const file = path.join(dir, 'mcp-tokens.enc');
+    const logs: string[] = [];
+    return { s: new RefreshStore(file, KEY, { log: (l) => logs.push(l) }), file, logs };
+  };
+  const fidOf = (token: string) => r1Bytes(token).subarray(0, 16);
+  const chain = (s: RefreshStore, first: string, n: number, fingerprint?: string): string[] => {
+    const out = [first];
+    for (let i = 0; i < n; i++) out.push(s.rotate(out[out.length - 1], 1000 + i, undefined, fingerprint)!.token);
+    return out;
+  };
+
+  it('a duplicate within the window and fingerprint gets back the exact same successor, and the family advances only once', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    const r1 = s.rotate(t0, 1005, undefined, 'fp-a');
+    const r2 = s.rotate(t0, 1010, undefined, 'fp-a');
+    expect(r2).toEqual(r1);
+    expect(r1!.token).toBe(specSuccessor(KEY, t0).token);
+    expect(onDisk(file, KEY).families[fidOf(t0).toString('base64url')]).toMatchObject({ gen: 1 });
+    expect(s.rotate(r2!.token, 2000, undefined, 'fp-a')!.sub).toBe('owner');
+  });
+
+  it('a duplicate with a different fingerprint than the rotation that retired the token is reuse', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    s.rotate(t0, 1005, undefined, 'fp-a');
+    expect(s.rotate(t0, 1010, undefined, 'fp-b')).toBeNull();
+    expect(onDisk(file, KEY).families).toEqual({});
+  });
+
+  it('the replay window is inclusive at its edge and exclusive one ms later', () => {
+    const { s: onEdge } = storeAt();
+    const atEdge = onEdge.issue(1000, 'owner', 'fp-a');
+    const edgeNext = onEdge.rotate(atEdge, 1000, undefined, 'fp-a');
+    expect(onEdge.rotate(atEdge, 1000 + REPLAY_WINDOW_MS, undefined, 'fp-a')).toEqual(edgeNext);
+
+    const { s: pastEdge, file } = storeAt();
+    const t0 = pastEdge.issue(1000, 'owner', 'fp-a');
+    pastEdge.rotate(t0, 1000, undefined, 'fp-a');
+    expect(pastEdge.rotate(t0, 1000 + REPLAY_WINDOW_MS + 1, undefined, 'fp-a')).toBeNull();
+    expect(onDisk(file, KEY).families).toEqual({});
+  });
+
+  it('a clock stepped back before usedAt is reuse, however close, not a duplicate at any distance', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    s.rotate(t0, 50_000, undefined, 'fp-a');
+    // 1 ms before usedAt (50_000): still within REPLAY_WINDOW_MS of it by distance alone.
+    expect(s.rotate(t0, 49_999, undefined, 'fp-a')).toBeNull();
+    expect(onDisk(file, KEY).families).toEqual({});
+
+    const { s: s2 } = storeAt();
+    const t1 = s2.issue(1000, 'owner', 'fp-a');
+    s2.rotate(t1, 50_000, undefined, 'fp-a');
+    // Far enough back that a sign bug (nowMs - usedAt wrapping negative, still <= the window) would also accept it.
+    expect(s2.rotate(t1, 0, undefined, 'fp-a')).toBeNull();
+  });
+
+  it('a token two generations behind is reuse even inside the window with a matching fingerprint', () => {
+    const { s, file } = storeAt();
+    const t = chain(s, s.issue(1000, 'owner', 'fp-a'), 2, 'fp-a');
+    expect(s.rotate(t[0], 1005, undefined, 'fp-a')).toBeNull();
+    expect(onDisk(file, KEY).families).toEqual({});
+  });
+
+  it('a different gen-1 token for the same family (another rand) is reuse, not the token that was actually retired', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    s.rotate(t0, 1005, undefined, 'fp-a');
+    const impostor = specToken(KEY, fidOf(t0), 0);
+    expect(s.rotate(impostor.token, 1010, undefined, 'fp-a')).toBeNull();
+    expect(onDisk(file, KEY).families).toEqual({});
+  });
+
+  it('without a fingerprint on the call, a gen-1-behind token is always reuse (strict)', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner');
+    s.rotate(t0, 1005);
+    expect(s.rotate(t0, 1010)).toBeNull();
+    expect(onDisk(file, KEY).families).toEqual({});
+  });
+
+  it('a family keeps no by field when it was issued with no fingerprint', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner');
+    const fid = fidOf(t0).toString('base64url');
+    expect(Object.hasOwn(onDisk(file, KEY).families[fid], 'by')).toBe(false);
+
+    const t1 = s.issue(1000, 'owner', 'fp-a');
+    const fid1 = fidOf(t1).toString('base64url');
+    expect(onDisk(file, KEY).families[fid1].by).toBe('fp-a');
+  });
+
+  it('a family with a recorded by is still reuse when the call presents no fingerprint', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    s.rotate(t0, 1005, undefined, 'fp-a'); // f.by = 'fp-a'
+    expect(s.rotate(t0, 1010)).toBeNull(); // presented with no fingerprint at all
+    expect(onDisk(file, KEY).families).toEqual({});
+  });
+
+  it('a rotation with no fingerprint clears the family\'s by, so a later replay with the old one is reuse', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    const t1 = s.rotate(t0, 1005, undefined, 'fp-a')!.token; // f.by = 'fp-a'
+    const fid = fidOf(t0).toString('base64url');
+    expect(onDisk(file, KEY).families[fid].by).toBe('fp-a');
+    s.rotate(t1, 1010); // no fingerprint: must clear by, not leave it at 'fp-a'
+    expect(Object.hasOwn(onDisk(file, KEY).families[fid], 'by')).toBe(false);
+    // t1 is now one generation behind; presenting it with the old fingerprint,
+    // inside the window, must still be reuse because by is no longer set.
+    expect(s.rotate(t1, 1011, undefined, 'fp-a')).toBeNull();
+    expect(onDisk(file, KEY).families).toEqual({});
+  });
+
+  it('v6.0.0-beta.4 (the latest release, before by existed) still rotates a family that has one', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    const t1 = s.rotate(t0, 1005, undefined, 'fp-a')!.token;
+    const fid = fidOf(t0).toString('base64url');
+    expect(onDisk(file, KEY).families[fid].by).toBe('fp-a');
+
+    const prev = new PrevReleaseRefreshStore(file, KEY);
+    const rotated = prev.rotate(t1, 2000);
+    expect(rotated).not.toBeNull();
+    expect(rotated!.sub).toBe('owner');
+    // The older release has no notion of by: it drops the extra field on
+    // the next write rather than rejecting the record that carries it.
+    expect(Object.hasOwn(onDisk(file, KEY).families[fid], 'by')).toBe(false);
+    expect(s.rotate(rotated!.token, 2001)!.sub).toBe('owner');
+  });
+
+  it('a false accept on a duplicate drops every session of that subject, exactly like a normal rotation', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    s.issue(1000, 'owner');
+    s.rotate(t0, 1005, undefined, 'fp-a');
+    expect(s.rotate(t0, 1010, () => false, 'fp-a')).toBeNull();
+    expect(onDisk(file, KEY).families).toEqual({});
+  });
+
+  it('a duplicate with nothing else to prune writes nothing to disk', () => {
+    const { s, file } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    s.rotate(t0, 1005, undefined, 'fp-a');
+    const before = readFileSync(file);
+    s.rotate(t0, 1010, undefined, 'fp-a');
+    expect(readFileSync(file).equals(before)).toBe(true);
+  });
+
+  it('the replayed log line carries only the family tag, never the token, subject or fingerprint', () => {
+    const { s, logs } = storeAt();
+    const t0 = s.issue(1000, 'owner', 'fp-a');
+    s.rotate(t0, 1005, undefined, 'fp-a');
+    s.rotate(t0, 1010, undefined, 'fp-a');
+    expect(logs).toEqual([`refresh family replayed tag=${specTag(fidOf(t0))}`]);
+    expect(logs.join('\n')).not.toContain('owner');
+    expect(logs.join('\n')).not.toContain('fp-a');
+    expect(logs.join('\n')).not.toContain(t0.slice(3));
+  });
+
+  it('clientFingerprint is deterministic, fixed-length, and distinguishes any differing input', () => {
+    const key = refreshMacKey('master-key-for-test');
+    const a = clientFingerprint('client-1', 'ua-1', '127.0.0.1', key);
+    expect(a).toBe(clientFingerprint('client-1', 'ua-1', '127.0.0.1', key));
+    expect(a).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(a).not.toBe(clientFingerprint('client-2', 'ua-1', '127.0.0.1', key));
+    expect(a).not.toBe(clientFingerprint('client-1', 'ua-2', '127.0.0.1', key));
+    expect(a).not.toBe(clientFingerprint('client-1', 'ua-1', '127.0.0.2', key));
+  });
+
+  it('clientFingerprint is keyed: not the unkeyed hash of the same inputs, and different under another key', () => {
+    const key = refreshMacKey('master-key-for-test');
+    const otherKey = refreshMacKey('a-different-master-key');
+    const a = clientFingerprint('client-1', 'ua-1', '127.0.0.1', key);
+    const unkeyed = createHash('sha256').update('client-1\nua-1\n127.0.0.1').digest().subarray(0, 16).toString('base64url');
+    expect(a).not.toBe(unkeyed);
+    expect(a).not.toBe(clientFingerprint('client-1', 'ua-1', '127.0.0.1', otherKey));
   });
 });
 
