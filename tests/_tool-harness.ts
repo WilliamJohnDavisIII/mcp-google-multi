@@ -109,7 +109,27 @@ export function toolHarness(opts: HarnessOptions = {}) {
   async function call(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
     const handler = handlers[name];
     if (!handler) throw new Error(`tool not registered: ${name}`);
-    return handler(z.object(schemas[name]).parse(args) as Record<string, unknown>, {});
+    try {
+      return handler(z.object(schemas[name]).parse(args) as Record<string, unknown>, {});
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        const account = (args as Record<string, unknown>)?.account as string | undefined;
+        const flat = error.flatten();
+        const messages = [
+          ...flat.formErrors,
+          ...Object.entries(flat.fieldErrors).flatMap(([field, msgs]) => msgs.map(m => `${field}: ${m}`)),
+        ];
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({
+            error: 'invalid_params',
+            message: messages.join('; '),
+            ...(account ? { account } : {}),
+          }, null, 2) }],
+          isError: true,
+        };
+      }
+      throw error;
+    }
   }
 
   const requests = (): GoogleRequest[] => request.mock.calls.map(([r]) => r as GoogleRequest);

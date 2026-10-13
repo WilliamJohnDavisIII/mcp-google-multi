@@ -25,7 +25,8 @@ function contextFor(
 type Built = ReturnType<typeof contextFor>;
 
 const WIZARD = ['account_add', 'account_reauth', 'account_write_config'];
-const HOST_FILE_TOOLS = ['drive_upload', 'drive_download', 'drive_export', 'gmail_download_attachment'];
+// drive_upload is always registered (contentBase64 needs no host disk); localPath is owner-only, checked below.
+const HOST_FILE_TOOLS = ['drive_download', 'drive_export', 'gmail_download_attachment'];
 
 let A: Built;
 let B: Built;
@@ -180,6 +181,8 @@ describe('buildRegistry resolves every handler through its context', () => {
     expect(isOwnerContext(forged.ctx)).toBe(false);
     for (const name of [...WIZARD, ...HOST_FILE_TOOLS]) expect(forged.handlers[name], name).toBeUndefined();
     expect(forged.schemas.drive_update).not.toHaveProperty('localPath');
+    expect(forged.handlers.drive_upload).toBeDefined();
+    expect(forged.schemas.drive_upload).not.toHaveProperty('localPath');
     const ids = parse(await forged.handlers.diagnose({})).sections.map((s: { id: number }) => s.id);
     expect(ids).not.toContain(3);
     expect(ids).not.toContain(7);
@@ -192,6 +195,10 @@ describe('buildRegistry resolves every handler through its context', () => {
     expect(A.schemas.gmail_create_draft).not.toHaveProperty('attachments');
     const upd = await A.handlers.drive_update({ account: 'test', fileId: 'F1', localPath: '/etc/hostname' });
     expect(upd.isError).toBe(true);
+    expect(A.handlers.drive_upload).toBeDefined();
+    expect(A.schemas.drive_upload).not.toHaveProperty('localPath');
+    const uploadLocal = await A.handlers.drive_upload({ account: 'test', filename: 'f.txt', localPath: '/etc/hostname' });
+    expect(uploadLocal.isError).toBe(true);
     const mail = { account: 'test', to: 'x@y.example', subject: 's', body: 'b', attachments: [{ path: '/etc/hostname' }] };
     for (const tool of ['gmail_send', 'gmail_create_draft']) {
       const res = await A.handlers[tool](mail);
