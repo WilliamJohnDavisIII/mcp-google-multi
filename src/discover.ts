@@ -126,7 +126,7 @@ export function registerDiscoverTools(registry: ToolRegistry, policy: Policy): v
                 writeControl: rendered?.hint ?? describePolicy(policy),
                 next:
                   operations.length > 0
-                    ? 'Call the chosen tool by name; it is now listed and callable.'
+                    ? 'Call the chosen tool by its exact name. A client that loads tools on demand may need its own tool-search or load step before the call succeeds.'
                     : `No ${service} operation matches "${query}". Call again without query for the full catalog.`,
               }),
             },
