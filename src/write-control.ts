@@ -45,12 +45,12 @@ export const IRREVERSIBLE_TOOLS = new Set([
   'gmail_send',
   'gmail_send_draft',
   'gmail_delete',
+  'gmail_delete_draft',
   'gmail_batch_delete',
   'drive_delete',
   'drive_empty_trash',
   // generated twins (permanent deletes / real sends)
   'gmail_users_threads_delete',
-  'gmail_users_drafts_delete',
   'chat_spaces_messages_delete',
   'cloudidentity_customers_userinvitations_send',
   'vault_matters_holds_delete',

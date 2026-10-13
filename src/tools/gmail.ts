@@ -1229,6 +1229,30 @@ export function registerGmailTools(server: ToolRegistry, deps: CuratedToolDeps =
   );
 
   server.registerTool(
+    'gmail_delete_draft',
+    {
+      description: 'Permanently delete a Gmail draft by its draft ID',
+      inputSchema: {
+        account: accountEnum.describe('Google account alias'),
+        draftId: z.string().min(1).describe('Draft ID to delete'),
+      },
+    },
+    async ({ account, draftId }) => {
+      try {
+        const auth = await getClientFn(account as Account);
+        const gmail = gmailClient({ version: 'v1', auth });
+        await gmail.users.drafts.delete({ userId: 'me', id: draftId });
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({ deleted: true, draftId }, null, 2) }],
+        };
+      } catch (error: any) {
+        const mapped = composeErrorResult(error, account as Account);
+        return mapped ?? handleGmailError(error, account as Account);
+      }
+    },
+  );
+
+  server.registerTool(
     'gmail_list_labels',
     {
       description: 'List all Gmail labels (system and user-defined). Use to get label IDs for gmail_modify_labels.',
