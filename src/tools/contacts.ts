@@ -288,8 +288,8 @@ export function registerContactsTools(server: ToolRegistry, deps: CuratedToolDep
           'LAST_NAME_ASCENDING',
         ]).default('FIRST_NAME_ASCENDING').optional()
           .describe('Sort order (default: FIRST_NAME_ASCENDING)'),
-        requireEmail: coerceBoolean.optional().describe('Only return contacts with at least one email address (filtered after fetching the page)'),
-        requireName: coerceBoolean.optional().describe('Only return contacts with a name (filtered after fetching the page)'),
+        requireEmail: coerceBoolean.optional().describe('Only return contacts with at least one email address. Filtering happens after the page is fetched, so the returned page can hold fewer than pageSize contacts; nextPageToken still continues the underlying, unfiltered listing'),
+        requireName: coerceBoolean.optional().describe('Only return contacts with a name. Filtering happens after the page is fetched, so the returned page can hold fewer than pageSize contacts; nextPageToken still continues the underlying, unfiltered listing'),
       },
     },
     async ({ account, pageSize, pageToken, sortOrder, requireEmail, requireName }) => {
