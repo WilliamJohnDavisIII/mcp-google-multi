@@ -20,7 +20,7 @@ itself). Before calling anything:
 
 1. Call `account_list` first. It returns each alias, its email, admin flag,
    token status, and which alias (if any) is the configured default.
-2. If a default account is set, omit `account` on a single-account call —
+2. If a default account is set, omit `account` on a single-account call;
    the server injects the default. Passing an alias is always safe too.
 3. If no default is set and more than one account is configured, you must
    pass `account` explicitly. A call that omits it then fails with
@@ -47,8 +47,8 @@ security boundary).
    An optional `query` argument filters the catalog by keyword.
 2. Call the tool **by its exact name** from that catalog. Do not guess a name
    by analogy with another service.
-3. `discover_all` reveals every curated tool across all services at once —
-   useful before a session doing substantial cross-service work — and
+3. `discover_all` reveals every curated tool across all services at once,
+   useful before a session doing substantial cross-service work, and
    `discover_reset` collapses back to the configured default afterward to
    reclaim context.
 4. A client that loads tool schemas on demand (rather than accepting
@@ -72,7 +72,7 @@ broad `gmail_search` on a timer. Two cheaper patterns:
 - **`gmail_search(since, until)`** when you have no stored history ID (e.g.
   the first sweep, or after a gap long enough that Gmail's history window
   has expired). Both accept an ISO 8601 date or a date-time with an explicit
-  `Z` or UTC offset — never a bare local time.
+  `Z` or UTC offset, never a bare local time.
 
 ## 4. Keep results small
 
@@ -88,13 +88,13 @@ discarding most of it:
   `gmail_read(full)` and `gmail_read_thread(full)`; pass `full: true` only
   when you actually need the untruncated body. `calendar_list_events` and
   `calendar_list_instances` always return a trimmed view with no `full`
-  argument to toggle — call `calendar_get_event` for one event's complete
+  argument to toggle; call `calendar_get_event` for one event's complete
   data.
-- Cap the page on list and search tools (the argument name varies by tool —
+- Cap the page on list and search tools (the argument name varies by tool:
   `drive_search(maxResults)` and `contacts_search(pageSize)` are two
   examples; check `{service}_discover` or the reference table for the exact
   name), and follow `nextPageToken` rather than assuming a short list is the
-  whole answer — a capped list reports `truncated` and a count precisely so
+  whole answer. A capped list reports `truncated` and a count precisely so
   you don't mistake "first page" for "everything".
 - On Gmail, pass `headers` on `gmail_read(headers)` or
   `gmail_read_batch(headers)` to fetch only `id`, `threadId`, `labelIds`, and
@@ -120,7 +120,7 @@ controlled by the deployment's `GOOGLE_PROFILE`:
 A write a profile refuses comes back as `{ error: "write_disabled", message,
 hint, retriable: false }` rather than a silent no-op or a generic failure.
 The `hint` names the exact rule that refused it (a deny pattern, the
-privileged-write rule, or the active profile) and what would need to change —
+privileged-write rule, or the active profile) and what would need to change;
 read it rather than retrying the same call. This applies identically to
 curated tools, generated tools, and the `google_api_call` escape hatch.
 
@@ -137,7 +137,7 @@ Each `reference/<service>.md` file tables every **curated** tool for that
 service: its name, its read/create/update/delete class, a one-line summary,
 and every argument with its type, whether it's required, and its
 description. **Generated** tools (the long tail, one per Google API
-Discovery method) are not tabled individually — they take Google's own
+Discovery method) are not tabled individually: they take Google's own
 Discovery parameter names directly, and calling `{service}_discover` lists
 each one with its arguments at call time.
 

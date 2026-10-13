@@ -64,7 +64,7 @@ describe('skill reference tables', () => {
     expect(onDisk).toEqual(Object.keys(generated).sort());
     for (const name of onDisk) {
       const diskContent = fs.readFileSync(path.join(referenceDir, name), 'utf8');
-      expect(diskContent, `${name} is stale — run npm run gen:skill`).toBe(generated[name]);
+      expect(diskContent, `${name} is stale, run npm run gen:skill`).toBe(generated[name]);
     }
   });
 
