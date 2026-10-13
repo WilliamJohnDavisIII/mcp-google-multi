@@ -53,6 +53,25 @@ describe('validateAddForm', () => {
     }
   });
 
+  it('allBundles leaves out the bundles Google refuses for a gmail.com address, and keeps them for any other domain', () => {
+    const personal = validateAddForm({ alias: 'me', email: 'Someone@Gmail.com', allBundles: true }, existing);
+    const work = validateAddForm({ alias: 'work', email: 'a@b.com', allBundles: true }, existing);
+    expect(personal.ok && work.ok).toBe(true);
+    if (personal.ok && work.ok) {
+      expect(personal.bundles).not.toContain('keep');
+      expect(personal.bundles).not.toContain('cloudidentity');
+      expect(work.bundles).toContain('keep');
+      expect(work.bundles).toContain('cloudidentity');
+      expect(personal.bundles.length).toBe(work.bundles.length - 2);
+    }
+  });
+
+  it('refuses a named keep or cloudidentity bundle for a personal address only', () => {
+    const r = validateAddForm({ alias: 'me', email: 'someone@googlemail.com', otherBundles: 'forms,keep' }, existing);
+    expect(r).toMatchObject({ ok: false, slug: 'E_VALIDATION', message: 'Google does not let a personal account grant "keep".' });
+    expect(validateAddForm({ alias: 'me', email: 'someone@b.com', otherBundles: 'forms,keep' }, existing).ok).toBe(true);
+  });
+
   it('rejects a bad alias', () => {
     const r = validateAddForm({ alias: 'has space', email: 'a@b.com' }, existing);
     expect(r.ok).toBe(false);

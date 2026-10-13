@@ -51,7 +51,7 @@ Each account can point at a named **scope profile** so consent is exactly what t
 | Bundle | Risk | Unlocks |
 |---|---|---|
 | `slides` | low | Create and edit Slides presentations |
-| `keep` | low | Read and edit Keep notes |
+| `keep` | low | Read and edit Keep notes (not for a personal account) |
 | `driveactivity` | low | Read the Drive activity feed |
 | `postmaster` | low | Read Postmaster Tools deliverability data |
 | `analytics` | low | Read Google Analytics (GA4): reports, realtime, account/property config |
@@ -65,13 +65,15 @@ Each account can point at a named **scope profile** so consent is exactly what t
 | `script` | medium | Apps Script projects and deployments |
 | `groupssettings` | medium | Google Groups settings |
 | `gmail_settings_sharing` | high | Forwarding/delegation — can route mail out |
-| `cloudidentity` | high | Cloud Identity groups and devices |
+| `cloudidentity` | high | Cloud Identity groups and devices (not for a personal account) |
 | `groupsmigration` | high | Migrate messages into Groups |
 | `licensing` | high | Assign/revoke license seats |
 | `reseller` | high | Reseller subscriptions and orders |
 | `appsmarket` | high | Marketplace license assignments |
 | `vault` | high (Workspace-only) | eDiscovery over the whole domain |
 | `admin` | high (Workspace-only) | Directory management + audit reports |
+
+Google refuses the `keep` and `cloudidentity` scopes on a personal account's consent screen, and the refusal fails the whole sign-in. So for a `gmail.com` or `googlemail.com` address, `allBundles` leaves both out, and naming either one is refused with `E_VALIDATION`.
 
 ## Environment variables
 
