@@ -663,6 +663,23 @@ describe('fs-atomic', () => {
       utimesSync(lock, new Date(Date.now() - 3_000), new Date(Date.now() - 3_000));
       expectBroken(p);
     });
+
+    it('a fallback holder whose lock was broken does not remove its successor\'s lock, and a third writer cannot enter while the successor holds it', () => {
+      denyLink('EACCES');
+      const p = path.join(base, 'f.json');
+      withFileLock(p, () => {
+        // The waiter judged this holder dead, broke its lock, and a successor
+        // took over, all before this holder released.
+        for (const n of droppings(p)) rmSync(path.join(base, n));
+        writeFileSync(lockOf(p), String(process.pid), { mode: 0o600 });
+      });
+      expect(readFileSync(lockOf(p), 'utf8')).toBe(String(process.pid));
+      expect(droppings(p)).toEqual([path.basename(lockOf(p))]);
+      fastClock();
+      let thirdRan = false;
+      expect(() => withFileLock(p, () => void (thirdRan = true))).toThrow(/Timed out waiting/);
+      expect(thirdRan).toBe(false);
+    });
   });
 });
 

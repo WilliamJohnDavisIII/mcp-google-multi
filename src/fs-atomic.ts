@@ -207,6 +207,9 @@ function releaseBreaker(breaker: string, token: string): void {
   }
 }
 
+/** The lock's own identity at the moment this call created it. */
+type LockAcquisition = FileId & { mtimeNs: bigint };
+
 // Hardlink-based advisory lock; the lock body is the bare pid, as older
 // readers expect. See docs/internals.md.
 export function withFileLock<T>(absPath: string, fn: () => T, label = `lock: ${absPath}`): T {
@@ -217,12 +220,14 @@ export function withFileLock<T>(absPath: string, fn: () => T, label = `lock: ${a
   fs.writeFileSync(ownerFile, String(process.pid), { mode: 0o600, flag: 'wx' });
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   let linked = false;
+  let acquired: LockAcquisition | undefined;
 
   try {
     while (true) {
       try {
         fs.linkSync(ownerFile, lock);
         linked = true;
+        acquired = fs.lstatSync(lock, { bigint: true });
         break;
       } catch (error) {
         const err = error as NodeJS.ErrnoException;
@@ -233,6 +238,7 @@ export function withFileLock<T>(absPath: string, fn: () => T, label = `lock: ${a
           try {
             fs.writeFileSync(lock, String(process.pid), { mode: 0o600, flag: 'wx' });
             linked = true;
+            acquired = fs.lstatSync(lock, { bigint: true });
             break;
           } catch (writeError) {
             if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError;
@@ -257,22 +263,24 @@ export function withFileLock<T>(absPath: string, fn: () => T, label = `lock: ${a
     if (!linked) fs.rmSync(ownerFile, { force: true });
   }
 
-  let bound = false;
   try {
-    // Some network and FUSE filesystems give each name of one file its own
-    // inode number; there the owner file cannot vouch for the lock.
-    bound = sameFile(fs.lstatSync(ownerFile, { bigint: true }), fs.lstatSync(lock, { bigint: true }));
     return fn();
   } finally {
-    releaseLock(lock, ownerFile, bound);
+    releaseLock(lock, ownerFile, acquired);
   }
 }
 
 // A holder whose lock was broken (its owner file removed with it) must not
-// remove its successor's lock.
-function releaseLock(lock: string, ownerFile: string, bound: boolean): void {
+// remove its successor's lock: only drop the lock if it is still the exact
+// file this call created, and our own owner file is still there to vouch for it.
+function releaseLock(lock: string, ownerFile: string, acquired: LockAcquisition | undefined): void {
   try {
-    if (!bound || sameFile(fs.lstatSync(ownerFile, { bigint: true }), fs.lstatSync(lock, { bigint: true }))) fs.rmSync(lock, { force: true });
+    if (acquired) {
+      const current = fs.lstatSync(lock, { bigint: true });
+      if (sameFile(current, acquired) && current.mtimeNs === acquired.mtimeNs && fs.existsSync(ownerFile)) {
+        fs.rmSync(lock, { force: true });
+      }
+    }
   } catch (error) {
     if (!isEnoent(error)) throw error;
   }
