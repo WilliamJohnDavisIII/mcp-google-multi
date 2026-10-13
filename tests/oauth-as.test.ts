@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { resolveHttpConfig } from '../src/http-config.js';
 import { HttpTransportHost } from '../src/http-transport.js';
 import { buildAuthServer, redirectAllowed, verifiedEmailFromIdToken, verifiedIdentityFromIdToken, DCR_MAX_CLIENTS, DCR_MAX_REDIRECT_URIS, type AuthServer, type AuthServerDeps } from '../src/oauth-as.js';
-import { jwtSecretFrom, signAccessToken, signPending, signReauthLink, verifyAccessToken, refreshFamilyTagger, RefreshStore, ReplayGuard } from '../src/mcp-token.js';
+import { jwtSecretFrom, signAccessToken, signPending, signReauthLink, verifyAccessToken, refreshFamilyTagger, RefreshStore, ReplayGuard, REPLAY_WINDOW_MS } from '../src/mcp-token.js';
 import { SsrfBlockedError } from '../src/ssrf-guard.js';
 import { CIMD_MAX_IN_FLIGHT } from '../src/cimd-cache.js';
 import { z } from "zod";
@@ -1202,6 +1202,18 @@ describe('refresh lifetimes on AuthServerConfig', () => {
       expect(logs.join('\n')).not.toContain(t.slice(3));
     }
     expect(lines.join('\n')).not.toMatch(/owner|@x\.example/);
+  });
+
+  it('the same retired token from the same client after the replay window is still reuse', async () => {
+    const port = await startWith({});
+    const rt = await signIn(port);
+    const winner = await refreshAt(port, 0, rt, 'same-client/1.0');
+    expect(winner.status).toBe(200);
+    // Same user-agent (and address, and client_id) as the winning rotation,
+    // but presented past REPLAY_WINDOW_MS: not a concurrent duplicate.
+    expectInvalidGrant(await refreshAt(port, REPLAY_WINDOW_MS + 1, rt, 'same-client/1.0'));
+    // The family is revoked: even the winner's own successor stops working.
+    expectInvalidGrant(await refreshAt(port, REPLAY_WINDOW_MS + 1, winner.body.refresh_token, 'same-client/1.0'));
   });
 });
 
