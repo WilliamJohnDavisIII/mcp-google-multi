@@ -428,7 +428,7 @@ export function registerDocsTools(server: ToolRegistry, deps: CuratedToolDeps = 
           findText: z.string(),
           replaceText: z.string(),
           matchCase: coerceBoolean.optional(),
-        }))).optional().describe('Several find/replace pairs applied in one batchUpdate, each returning its own count. Exactly one of this or findText/replaceText is required.'),
+        })).min(1)).optional().describe('Several find/replace pairs applied in one batchUpdate, each returning its own count. Exactly one of this or findText/replaceText is required.'),
       },
     },
     async ({ account, documentId, findText, replaceText, matchCase, replacements }) => {

@@ -303,3 +303,14 @@ describe('drive_upload with both contentBase64 and localPath', () => {
   });
 });
 
+describe('docs_replace_text with empty replacements array', () => {
+  it('rejects an empty replacements array, before any request', async () => {
+    const h = toolHarness();
+    const res = await h.call('docs_replace_text', { account: 'test', documentId: 'D1', replacements: [] });
+    const env = parse(res);
+    expect(res.isError).toBe(true);
+    expect(env.error).toBe('invalid_params');
+    expect(h.requests()).toHaveLength(0);
+  });
+});
+
