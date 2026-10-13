@@ -166,7 +166,7 @@ The rule is derived from each method's declared scopes and name, not from a hand
 
 `gmail_trash`, `drive_trash`, and Gmail's generated thread-level twin only move an item to Trash, which the Drive and Gmail UIs can still recover from; `safe-writes` allows them like any other non-privileged write. Untrashing was already a plain `update` and was never refused. Every other delete, including emptying Trash, a permanent Gmail or Drive delete, and `drive_transfer`'s `move` flag, stays refused under `safe-writes`.
 
-In numbers, `safe-writes` permits 274 of 545 write tools instead of 385. Everything it newly refuses beyond the three Trash moves above is Workspace administration, Vault, reseller billing, script deployment, or push registration. No other `gmail`, `drive`, `calendar`, `docs`, `sheets`, `tasks` or `contacts` write is affected except the seven `*_watch` registrations.
+In numbers, `safe-writes` permits 274 of 545 write tools instead of 385. It now also allows `gmail_trash`, `drive_trash`, and `gmail_users_threads_trash`, while still refusing every permanent delete, write with a privileged scope, and push-channel registration. No other `gmail`, `drive`, `calendar`, `docs`, `sheets`, `tasks` or `contacts` write is affected except the seven `*_watch` registrations.
 
 ## Services
 
