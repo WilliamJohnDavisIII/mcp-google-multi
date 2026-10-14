@@ -29,9 +29,9 @@ describe('package exports map', () => {
     }
   });
 
-  it('the root export and main agree, and dist is the only published dir', () => {
+  it('the root export and main agree, and the published dirs are dist and skills', () => {
     expect(pkg.exports['.']).toBe(`./${pkg.main}`);
-    expect(pkg.files).toEqual(['dist']);
+    expect(pkg.files).toEqual(['dist', 'skills']);
   });
 
   it('./write-control is declared: a caller building its own context can resolve a Policy', async () => {

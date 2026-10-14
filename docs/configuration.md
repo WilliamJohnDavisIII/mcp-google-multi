@@ -82,7 +82,7 @@ Google refuses the `keep` and `cloudidentity` scopes on a personal account's con
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | ✓ | OAuth **Desktop** client from Google Cloud — see [Google Cloud setup](./google-cloud-setup.md) |
 | `GOOGLE_ACCOUNTS` | — | `alias:email,…` — e.g. `work:you@co.com,personal:you@gmail.com`. When set and non-empty it replaces the `config.json` registry; one of the two must define at least one account |
 | `GOOGLE_DEFAULT_ACCOUNT` | | Alias used when a tool call omits `account` (or set `"defaultAccount"` in config.json; env wins; note: while `GOOGLE_ACCOUNTS` is set, the whole registry — including the default — comes from env, so the config field is inert). Unset = `account` stays required per call (`E_NO_DEFAULT_ACCOUNT` hint on omission). An alias that is not configured fails startup with `E_DEFAULT_ACCOUNT_UNKNOWN`. Explicit aliases, `*` and CSV are never affected |
-| `GOOGLE_DISCOVERY` | | Tool-surface visibility: `lazy` (default — meta-tools only until `{service}_discover`), `curated` (all 188 curated tools advertised eagerly), `eager` (everything). An invalid value warns and falls back to `lazy`; over HTTP the mode is always `curated`. At runtime an agent can `discover_all` / `discover_reset` to expand/collapse a lazy surface without config changes |
+| `GOOGLE_DISCOVERY` | | Tool-surface visibility: `lazy` (default — meta-tools only until `{service}_discover`), `curated` (all 191 curated tools advertised eagerly), `eager` (everything). An invalid value warns and falls back to `lazy`; over HTTP the mode is always `curated`. At runtime an agent can `discover_all` / `discover_reset` to expand/collapse a lazy surface without config changes |
 | `MASTER_KEY` | | encrypts the token store. Optional: resolved as env > OS keychain > `master.key` (0600, in the config dir) > generated on first use. Keep it in env for deployments that may downgrade or move hosts. Never regenerated while encrypted tokens exist (`E_MASTER_KEY_MISSING_TOKENS_EXIST`) |
 | `GOOGLE_PROFILE` | — | write policy: `read-only` (default) · `safe-writes` · `full-writes`; an invalid value warns and falls back to `read-only` |
 | `GOOGLE_READ_ONLY` | — | `true` (or `1`/`yes`) = hard kill-switch for all writes |
@@ -146,7 +146,7 @@ Reads are never gated. **Every create/update/delete is off until you opt in** �
 | `GOOGLE_PROFILE` | Allows |
 |---|---|
 | `read-only` (default) | reads only |
-| `safe-writes` | create + update on your own data (deletes and privileged writes blocked) |
+| `safe-writes` | create + update on your own data, plus moving items to or from Trash (permanent deletes and privileged writes blocked) |
 | `full-writes` | everything |
 
 `GOOGLE_READ_ONLY=true` overrides all; an invalid `GOOGLE_PROFILE` falls back to `read-only`. For fine control: `GOOGLE_WRITE_ALLOW="calendar:*, sheets:update*"` and `GOOGLE_WRITE_DENY="*:delete*"` (deny wins). The policy applies identically to curated tools, generated tools, and the escape hatch.
@@ -162,7 +162,11 @@ The rule is derived from each method's declared scopes and name, not from a hand
 
 `GOOGLE_WRITE_ALLOW` still wins over this, because naming a tool explicitly is a deliberate opt-in. `GOOGLE_WRITE_DENY` still wins over that.
 
-In numbers, `safe-writes` permits 271 of 545 write tools instead of 385. Everything it newly refuses is Workspace administration, Vault, reseller billing, script deployment, or push registration. No `gmail`, `drive`, `calendar`, `docs`, `sheets`, `tasks` or `contacts` write is affected except the seven `*_watch` registrations.
+### Trash is the one delete-shaped exception
+
+`gmail_trash`, `drive_trash`, and Gmail's generated thread-level twin only move an item to Trash, which the Drive and Gmail UIs can still recover from; `safe-writes` allows them like any other non-privileged write. Untrashing was already a plain `update` and was never refused. Every other delete, including emptying Trash, a permanent Gmail or Drive delete, and `drive_transfer`'s `move` flag, stays refused under `safe-writes`.
+
+In numbers, `safe-writes` permits 274 of 545 write tools instead of 385. It now also allows `gmail_trash`, `drive_trash`, and `gmail_users_threads_trash`, while still refusing every permanent delete, write with a privileged scope, and push-channel registration. No other `gmail`, `drive`, `calendar`, `docs`, `sheets`, `tasks` or `contacts` write is affected except the seven `*_watch` registrations.
 
 ## Services
 

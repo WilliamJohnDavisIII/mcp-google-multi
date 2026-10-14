@@ -109,6 +109,7 @@ export const CURATED_METHOD_IDS: string[] = [
   'forms.forms.setPublishSettings',
   'forms.forms.watches.list',
   'gmail.users.drafts.create',
+  'gmail.users.drafts.delete',
   'gmail.users.drafts.get',
   'gmail.users.drafts.list',
   'gmail.users.drafts.send',

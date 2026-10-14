@@ -19,24 +19,40 @@ if (!fs.existsSync(ENTRY)) {
 }
 
 const { BUNDLE_CATALOG } = await import(path.join(ROOT, 'dist', 'scope-catalog.js'));
-// The legacy global-scopes env is the one-line way to grant every bundle to a
-// throwaway fixture process; the E_LEGACY stderr warning is expected and inert.
-const bundles = Object.keys(BUNDLE_CATALOG).filter((b) => b !== 'admin').join(',');
+// Every bundle, read from the built scope catalog so new bundles are measured
+// automatically, granted through one fixture account's scope profile.
+const bundles = Object.keys(BUNDLE_CATALOG).filter((b) => b !== 'admin');
 
-// Worst-case surface on purpose: every bundle enabled (read from the built
-// scope catalog so new bundles are measured automatically), full toolset, lazy mode.
+const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gm-measure-'));
+const configDir = path.join(configRoot, 'mcp-google-multi');
+fs.mkdirSync(configDir, { recursive: true });
+fs.writeFileSync(
+  path.join(configDir, 'config.json'),
+  JSON.stringify({
+    version: 1,
+    accounts: { example: { email: 'user@example.com', admin: true, scopeProfile: 'all' } },
+    scopeProfiles: { all: { bundles } },
+    defaultAccount: 'example',
+  }),
+);
+
+// Worst-case surface on purpose: every bundle enabled, full toolset, lazy mode.
 const env = {
   ...process.env,
-  GOOGLE_ACCOUNTS: 'example:user@example.com',
-  GOOGLE_ADMIN_ACCOUNTS: 'example',
   GOOGLE_CLIENT_ID: 'measure',
   GOOGLE_CLIENT_SECRET: 'measure',
   MASTER_KEY: 'a'.repeat(64),
-  TOKEN_STORE_PATH: fs.mkdtempSync(path.join(os.tmpdir(), 'gm-measure-')),
-  GOOGLE_OPTIONAL_SCOPES: bundles,
+  XDG_CONFIG_HOME: configRoot,
   GOOGLE_TOOLSETS: 'all',
   GOOGLE_DISCOVERY: 'lazy',
 };
+// A per-account scopeProfile needs the config.json path: an ambient
+// GOOGLE_ACCOUNTS/GOOGLE_OPTIONAL_SCOPES/GOOGLE_ADMIN_ACCOUNTS/TOKEN_STORE_PATH
+// would otherwise override or shadow the fixture above.
+delete env.GOOGLE_ACCOUNTS;
+delete env.GOOGLE_OPTIONAL_SCOPES;
+delete env.GOOGLE_ADMIN_ACCOUNTS;
+delete env.TOKEN_STORE_PATH;
 
 const p = spawn(process.execPath, [ENTRY], { cwd: ROOT, env, stdio: ['pipe', 'pipe', 'pipe'] });
 let buf = '';

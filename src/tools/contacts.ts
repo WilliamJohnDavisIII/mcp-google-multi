@@ -278,8 +278,8 @@ export function registerContactsTools(server: ToolRegistry, deps: CuratedToolDep
       description: 'List all contacts (paginated)',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        pageSize: z.number().min(1).max(1000).default(100).optional()
-          .describe('Number of contacts per page (default: 100)'),
+        pageSize: z.number().min(1).max(1000).default(50).optional()
+          .describe('Number of contacts per page (default: 50)'),
         pageToken: z.string().optional().describe('Page token for pagination'),
         sortOrder: z.enum([
           'LAST_MODIFIED_ASCENDING',
@@ -288,20 +288,24 @@ export function registerContactsTools(server: ToolRegistry, deps: CuratedToolDep
           'LAST_NAME_ASCENDING',
         ]).default('FIRST_NAME_ASCENDING').optional()
           .describe('Sort order (default: FIRST_NAME_ASCENDING)'),
+        requireEmail: coerceBoolean.optional().describe('Only return contacts with at least one email address. Filtering happens after the page is fetched, so the returned page can hold fewer than pageSize contacts; nextPageToken still continues the underlying, unfiltered listing'),
+        requireName: coerceBoolean.optional().describe('Only return contacts with a name. Filtering happens after the page is fetched, so the returned page can hold fewer than pageSize contacts; nextPageToken still continues the underlying, unfiltered listing'),
       },
     },
-    async ({ account, pageSize, pageToken, sortOrder }) => {
+    async ({ account, pageSize, pageToken, sortOrder, requireEmail, requireName }) => {
       try {
         const auth = await getClientFn(account as Account);
         const people = peopleClient({ version: 'v1', auth });
         const res = await people.people.connections.list({
           resourceName: 'people/me',
           personFields: PERSON_FIELDS,
-          pageSize: pageSize ?? 100,
+          pageSize: pageSize ?? 50,
           pageToken: pageToken ?? undefined,
           sortOrder: sortOrder ?? 'FIRST_NAME_ASCENDING',
         });
-        const contacts = (res.data.connections ?? []).map(formatContact);
+        let contacts = (res.data.connections ?? []).map(formatContact);
+        if (requireEmail) contacts = contacts.filter((c) => c.emails.length > 0);
+        if (requireName) contacts = contacts.filter((c) => c.name !== '');
         return {
           content: [{ type: 'text' as const, text: JSON.stringify({
             contacts,

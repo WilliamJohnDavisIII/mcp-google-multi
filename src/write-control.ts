@@ -45,12 +45,12 @@ export const IRREVERSIBLE_TOOLS = new Set([
   'gmail_send',
   'gmail_send_draft',
   'gmail_delete',
+  'gmail_delete_draft',
   'gmail_batch_delete',
   'drive_delete',
   'drive_empty_trash',
   // generated twins (permanent deletes / real sends)
   'gmail_users_threads_delete',
-  'gmail_users_drafts_delete',
   'chat_spaces_messages_delete',
   'cloudidentity_customers_userinvitations_send',
   'vault_matters_holds_delete',
@@ -128,11 +128,24 @@ export function privilegeOf(tool: ToolRef): PrivilegeKind | undefined {
   return undefined;
 }
 
+/** Moves an item to Trash rather than deleting it permanently: the owner can
+ * still recover it, so safe-writes treats this like its other reversible
+ * writes despite the delete-shaped verb. Named explicitly rather than matched
+ * by verb, so a synthetic delete-classified check (drive_transfer's move
+ * flag) never qualifies by accident, and so emptying Trash, which the same
+ * verb regex also classifies as delete, is never swept in by a suffix match. */
+const TRASH_MOVE_TOOLS = new Set([
+  'gmail_trash',
+  'drive_trash',
+  'gmail_users_threads_trash',
+]);
+
 function profileAllows(profile: Profile, tool: ToolRef): boolean {
   if (profile === 'full-writes') return true;
   if (profile === 'safe-writes') {
     if (privilegeOf(tool) !== undefined) return false;
-    return tool.cud === 'create' || tool.cud === 'update';
+    if (tool.cud === 'create' || tool.cud === 'update') return true;
+    return tool.cud === 'delete' && TRASH_MOVE_TOOLS.has(tool.name);
   }
   return false;
 }

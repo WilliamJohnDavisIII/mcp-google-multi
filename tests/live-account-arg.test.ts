@@ -146,7 +146,7 @@ describe('real tools keep fan-out and validate live', () => {
 
   it('an alias added after build is valid on curated and generated tools, read and write', () => {
     const { aliases, schemaOf } = realRegistry(['a']);
-    const tools = ['gmail_search', 'gmail_send', 'gmail_users_labels_get', 'gmail_users_drafts_delete'];
+    const tools = ['gmail_search', 'gmail_send', 'gmail_users_labels_get', 'gmail_delete_draft'];
     for (const t of tools) expect(schemaOf(t).partial().safeParse({ account: 'fresh' }).success).toBe(false);
     aliases.push('fresh');
     for (const t of tools) expect(schemaOf(t).partial().safeParse({ account: 'fresh' }).success).toBe(true);

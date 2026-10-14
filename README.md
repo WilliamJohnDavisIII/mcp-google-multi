@@ -4,7 +4,7 @@ The most complete **local Google Workspace MCP server**: Gmail, Drive, Calendar,
 
 [![npm](https://img.shields.io/npm/v/mcp-google-multi?label=npm&color=cb3837)](https://www.npmjs.com/package/mcp-google-multi)
 
-- 🧰 **Exhaustive** — 940 tools across 29 services, now including Google Analytics (GA4), + an escape hatch for anything else → [COVERAGE.md](./COVERAGE.md)
+- 🧰 **Exhaustive** — 942 tools across 29 services, now including Google Analytics (GA4), + an escape hatch for anything else → [COVERAGE.md](./COVERAGE.md)
 - 🔑 **Multi-account** — drive any number of Google accounts by alias, or fan one call out across all of them
 - 🔒 **Private by design** — your own OAuth app, tokens encrypted at rest (AES-256-GCM), writes deny-by-default, no telemetry, no metering — it talks only to Google
 - 🌐 **Local or remote** — runs locally over stdio, or self-hosted over HTTP with its own built-in OAuth 2.1 server (Claude Code's `/mcp` login and the claude.ai connector, zero custom UI). Pull-and-up Docker Compose with optional automatic HTTPS → [remote setup](./docs/http-setup.md)
@@ -54,6 +54,20 @@ New to all this? It's written for someone who just installed Claude Code and has
 *On a server or from claude.ai?* Advanced path: [Remote / HTTP setup](./docs/http-setup.md). *Coming from v5?* [v6 migration guide](./MIGRATION-v6.md).
 
 **Go deeper:** [Configuration reference](./docs/configuration.md) · [What's covered](./COVERAGE.md) · [Features tour](./docs/features.md) · [Remote / HTTP setup](./docs/http-setup.md) · [Secrets in a vault](./docs/secrets.md) · [Local usage metrics](./docs/usage-metrics.md) · [Migrating to v6](./MIGRATION-v6.md) · [Security policy](./SECURITY.md) · [Roadmap](https://github.com/bakissation/mcp-google-multi/milestones)
+
+## Agent skill
+
+The repo and the npm package both ship an [Agent Skill](https://code.claude.com/docs/en/skills) at `skills/google-workspace/`: a hand-written `SKILL.md` covering account selection, the discover step, incremental Gmail sweeps, keeping results small, write profiles, and the escape hatch, plus a `reference/` folder with a generated argument table per service. Loading it gets an agent calling this server's tools correctly without guessing argument names.
+
+To install it for Claude Code, copy or symlink the `skills/google-workspace` folder into `~/.claude/skills/` (every project) or a project's own `.claude/skills/` (that project only):
+
+```bash
+# from a cloned copy of this repo
+ln -s "$(pwd)/skills/google-workspace" ~/.claude/skills/google-workspace
+
+# from the installed npm package
+ln -s "$(npm root -g)/mcp-google-multi/skills/google-workspace" ~/.claude/skills/google-workspace
+```
 
 ## Maintainer, sponsor & license
 

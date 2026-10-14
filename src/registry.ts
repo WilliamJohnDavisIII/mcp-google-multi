@@ -68,6 +68,40 @@ export interface CatalogOperation {
   unreachable?: true;
 }
 
+/** The leading sentence of a (possibly multi-sentence) tool description. */
+export function firstSentence(text: string): string {
+  let openParens = 0;
+  let i = 0;
+  const abbrevs = /^(e\.g|i\.e|etc|vs)\.$/i;
+
+  while (i < text.length) {
+    const char = text[i];
+
+    if (char === '(') {
+      openParens++;
+    } else if (char === ')') {
+      openParens = Math.max(0, openParens - 1);
+    } else if (char === '.' && i + 1 < text.length && text[i + 1] === ' ' && openParens === 0) {
+      // Found a period-space outside parentheses
+      // Check if it's preceded by an abbreviation (e.g., i.e., etc, vs)
+      // Find the word before this period
+      let wordStart = i - 1;
+      while (wordStart > 0 && /[a-zA-Z.]/.test(text[wordStart - 1])) {
+        wordStart--;
+      }
+      const word = text.slice(wordStart, i + 1);
+
+      if (!abbrevs.test(word)) {
+        // Not an abbreviation, so this is a valid sentence boundary
+        return text.slice(0, i + 1);
+      }
+    }
+    i++;
+  }
+
+  return text;
+}
+
 interface ToolConfig {
   description?: string;
   inputSchema?: z.ZodRawShape;
@@ -84,6 +118,8 @@ const CUD_OVERRIDES: Record<string, Cud> = {
   drive_transfer: 'create',
   // read-only resolver; the name's "resolve" verb would otherwise infer update.
   contacts_resolve: 'read',
+  // "respond" matches no write verb; it patches the event (a write).
+  calendar_respond_event: 'update',
   // Gated by anthropic/requiresUserInteraction, not write-control, so
   // onboarding works under any profile; cud=read also keeps them off fan-out.
   account_add: 'read',
@@ -258,8 +294,10 @@ export class ToolRegistry {
             refreshAccountSetIfStale();
             const def = this.accounts().defaultAccount;
             if (!def) {
-              const aliases = this.accounts().aliases;
-              const rendered = hints()?.render({ kind: 'no_default_account', aliases });
+              const accountSet = this.accounts();
+              const accounts = accountSet.aliases.map((alias) => ({ alias, email: accountSet.configs[alias]?.email ?? '' }));
+              const rendered = hints()?.render({ kind: 'no_default_account', accounts });
+              const pairs = accounts.map((a) => `${a.alias}=${a.email}`).join(', ');
               return {
                 content: [
                   {
@@ -267,7 +305,7 @@ export class ToolRegistry {
                     text: JSON.stringify({
                       error: 'E_NO_DEFAULT_ACCOUNT',
                       message: 'No "account" given and no default account is configured.',
-                      hint: rendered?.hint ?? `Pass account explicitly (valid: ${aliases.join(', ')}), or set GOOGLE_DEFAULT_ACCOUNT / "defaultAccount" in config.json.`,
+                      hint: rendered?.hint ?? `Pass account explicitly (valid: ${pairs}), or set GOOGLE_DEFAULT_ACCOUNT / "defaultAccount" in config.json.`,
                       retriable: false,
                     }),
                   },
@@ -378,17 +416,32 @@ export class ToolRegistry {
   }
 
   catalog(service: string, query?: string): CatalogOperation[] {
+    const candidates = this.tools.filter((t) => !t.meta && t.service === service);
+    const toOp = (t: ToolEntry, summary: string = t.description): CatalogOperation => ({
+      tool: t.name,
+      summary,
+      args: Object.keys(t.inputShape),
+      cud: t.cud,
+      ...(this.isUngrantable(t) ? { unreachable: true as const } : {}),
+    });
+
     const q = query?.trim().toLowerCase();
-    return this.tools
-      .filter((t) => !t.meta && t.service === service)
-      .filter((t) => !q || t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
-      .map((t) => ({
-        tool: t.name,
-        summary: t.description,
-        args: Object.keys(t.inputShape),
-        cud: t.cud,
-        ...(this.isUngrantable(t) ? { unreachable: true as const } : {}),
-      }));
+    if (!q) return candidates.map((t) => toOp(t));
+
+    // Tokenized OR-match (a strict superset of a plain substring test: a full-string
+    // hit implies every one of its tokens also hits) ranked by how many tokens matched.
+    const ranked = candidates
+      .map((t) => {
+        const hay = `${t.name} ${t.description}`.toLowerCase();
+        return { t, matched: q.split(/\s+/).filter(Boolean).filter((tok) => hay.includes(tok)).length };
+      })
+      .filter((r) => r.matched > 0)
+      .sort((a, b) => b.matched - a.matched);
+    if (ranked.length > 0) return ranked.map((r) => toOp(r.t));
+
+    // Nothing matched: list the whole service so the agent can still browse,
+    // one-line summaries only so a wide miss doesn't blow the response budget.
+    return candidates.map((t) => toOp(t, firstSentence(t.description)));
   }
 
   /** The metrics recorder, for hook sites (escape hatch); null when off. */
