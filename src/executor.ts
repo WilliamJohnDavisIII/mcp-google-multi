@@ -1,7 +1,11 @@
 import type { Account } from './accounts.js';
 import { getClient } from './client.js';
+import { sliceEncoded } from './trim.js';
 import { expandPath, isGoogleApiUrl } from './discovery-client.js';
 import { handleGoogleApiError } from './tools/_errors.js';
+import { scopeHintForMethod, type ScopeSetDeps } from './scope-observability.js';
+import { checkOutboundForMethod } from './outbound-allowlist.js';
+import { hints } from './hint-provider.js';
 
 export const MAX_RESPONSE_CHARS = 100_000;
 
@@ -14,10 +18,14 @@ export interface ApiMethodRef {
   path: string;
   baseUrl: string;
   requiredParams: string[];
+  /** Escape hatch: from runtime Discovery. Generated tools: baked at gen time. */
+  scopes?: readonly string[];
 }
 
 export interface ExecuteDeps {
   getClientFn?: typeof getClient;
+  /** Token + profile view behind a 403 scope hint; absent = the single owner. */
+  scopeDeps?: ScopeSetDeps;
 }
 
 export interface ExecuteArgs {
@@ -53,6 +61,10 @@ export function resolveRequestBody(httpMethod: string, body: unknown): unknown {
 }
 
 export async function executeApiMethod(method: ApiMethodRef, args: ExecuteArgs, deps: ExecuteDeps = {}) {
+  // Outbound allowlist: no-op when off; with it active, structured bodies are
+  // inspected for recipient fields and raw-compose methods are refused.
+  const outbound = checkOutboundForMethod(method.id, args.body, args.account);
+  if (outbound) return outbound;
   if (args.queryParams?.alt === 'media') {
     return jsonResult(
       {
@@ -98,11 +110,12 @@ export async function executeApiMethod(method: ApiMethodRef, args: ExecuteArgs, 
   }
 
   if (!isGoogleApiUrl(url)) {
+    const rendered = hints()?.render({ kind: 'untrusted_host' });
     return jsonResult(
       {
         error: 'untrusted_host',
         message: `Refusing to send credentials to a non-googleapis.com host for "${method.id}".`,
-        hint: 'The discovery cache may be corrupt; delete DISCOVERY_CACHE_PATH and retry.',
+        hint: rendered?.hint ?? 'The discovery cache may be corrupt; delete DISCOVERY_CACHE_PATH and retry.',
         retriable: false,
         account: args.account,
       },
@@ -121,15 +134,19 @@ export async function executeApiMethod(method: ApiMethodRef, args: ExecuteArgs, 
     });
     const text = JSON.stringify(res.data ?? null);
     if (text.length > MAX_RESPONSE_CHARS) {
+      // Budget the ENCODED head: jsonResult re-stringifies it, so slicing raw
+      // characters overshot the advertised cap on a quote-dense listing.
       return jsonResult({
         truncated: true,
         totalChars: text.length,
-        head: text.slice(0, MAX_RESPONSE_CHARS),
+        head: sliceEncoded(text, MAX_RESPONSE_CHARS),
         hint: 'Narrow the request (fields mask, pageSize) to get complete JSON.',
       });
     }
     return { content: [{ type: 'text' as const, text }] };
   } catch (error) {
-    return handleGoogleApiError(error, args.account as Account);
+    return handleGoogleApiError(error, args.account as Account, undefined, () =>
+      method.scopes?.length ? scopeHintForMethod(method.scopes, args.account, deps.scopeDeps) : null,
+    );
   }
 }

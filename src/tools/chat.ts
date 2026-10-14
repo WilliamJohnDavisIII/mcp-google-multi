@@ -2,14 +2,17 @@ import type { ToolRegistry } from '../registry.js';
 import { z } from 'zod';
 import { coerceJson } from './_coerce.js';
 import { chat as chatClient } from '@googleapis/chat';
-import { ACCOUNTS } from '../accounts.js';
+import { accountArgLive } from '../accounts.js';
 import type { Account } from '../accounts.js';
-import { getClient } from '../client.js';
-import { handleGoogleApiError } from './_errors.js';
+import { getClient, type CuratedToolDeps } from '../client.js';
+import { handleGoogleApiError, invalidParams } from './_errors.js';
 
-const accountEnum = z.enum(ACCOUNTS);
 
-export function registerChatTools(server: ToolRegistry): void {
+export function registerChatTools(server: ToolRegistry, deps: CuratedToolDeps = {}): void {
+  // Per-registry, live account enum + injectable client: the schema follows
+  // the registry's account view at parse time, not a process-global default.
+  const accountEnum = accountArgLive(() => server.accountAliases()).optional();
+  const getClientFn = deps.getClientFn ?? getClient;
   server.registerTool(
     'chat_spaces_list',
     {
@@ -23,7 +26,7 @@ export function registerChatTools(server: ToolRegistry): void {
     },
     async ({ account, pageSize, pageToken, filter }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const chat = chatClient({ version: 'v1', auth });
         const res = await chat.spaces.list({
           pageSize: pageSize ?? 100,
@@ -45,12 +48,12 @@ export function registerChatTools(server: ToolRegistry): void {
       description: 'Get details about a single Chat space',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        name: z.string().describe('Space resource name, format: spaces/{space}'),
+        name: z.string().min(1).describe('Space resource name, format: spaces/{space}'),
       },
     },
     async ({ account, name }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const chat = chatClient({ version: 'v1', auth });
         const res = await chat.spaces.get({ name });
         return {
@@ -78,9 +81,13 @@ export function registerChatTools(server: ToolRegistry): void {
     async ({ account, parent, text, cardsV2, threadKey, messageReplyOption }) => {
       try {
         if (!text && (!cardsV2 || cardsV2.length === 0)) {
-          return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Either text or cardsV2 must be provided' }) }], isError: true };
+          return invalidParams(
+            account as Account,
+            'A message needs content: neither text nor cardsV2 was supplied.',
+            'Pass text for a plain message, or cardsV2 for a Card v2 payload. Both may be sent together.',
+          );
         }
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const chat = chatClient({ version: 'v1', auth });
         const requestBody: any = {};
         if (text) requestBody.text = text;
@@ -116,7 +123,7 @@ export function registerChatTools(server: ToolRegistry): void {
     },
     async ({ account, parent, pageSize, pageToken, filter, orderBy }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const chat = chatClient({ version: 'v1', auth });
         const res = await chat.spaces.messages.list({
           parent,
@@ -135,6 +142,10 @@ export function registerChatTools(server: ToolRegistry): void {
   );
 }
 
-function handleChatError(error: any, account: Account) {
-  return handleGoogleApiError(error, account, "Chat tools require the optional \"chat\" scope bundle. Add GOOGLE_OPTIONAL_SCOPES=chat and re-auth.");
+export function handleChatError(error: any, account: Account) {
+  return handleGoogleApiError(error, account, {
+    scope: 'Chat tools require the optional "chat" scope bundle: add it to this account\'s scope profile, then re-auth.',
+    resource: `Google Chat denied this space or message to "${account}". The scope is not the problem: check that the account is a member of the space, and that Chat is turned on for the Workspace.`,
+    bundle: 'chat',
+  });
 }

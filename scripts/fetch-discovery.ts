@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Fetches the Discovery snapshot into discovery/ (gitignored) — npm run gen:discovery; feeds gen:tools, re-run on Google API revisions.
+// discovery/ is gitignored; refetch via npm run gen:discovery.
 
 interface Api {
   id: string;
@@ -12,7 +12,8 @@ const APIS: Api[] = [
   { id: 'admin', version: 'datatransfer_v1' },
   { id: 'admin', version: 'directory_v1' },
   { id: 'admin', version: 'reports_v1' },
-  { id: 'alertcenter', version: 'v1beta1' },
+  { id: 'analyticsadmin', version: 'v1beta' },
+  { id: 'analyticsdata', version: 'v1beta' },
   { id: 'appsmarket', version: 'v2' },
   { id: 'calendar', version: 'v3' },
   { id: 'chat', version: 'v1' },
@@ -43,8 +44,6 @@ const APIS: Api[] = [
   { id: 'workspaceevents', version: 'v1' },
 ];
 
-// Not fetchable: gsuiteaddons v1 (discovery endpoint requires auth), Marketplace SDK
-// (Cloud Console config, not a REST API), CalDAV (IETF protocol). Tracked in MANIFEST.md.
 const NO_DISCOVERY: Array<{ name: string; reason: string }> = [
   { name: 'gsuiteaddons v1', reason: 'discovery endpoint requires an authenticated, API-enabled project' },
   { name: 'Workspace Marketplace SDK', reason: 'configured in Cloud Console; not a discovery-backed REST API' },

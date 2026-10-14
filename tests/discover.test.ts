@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from '../src/registry.js';
 import { registerDiscoverTools } from '../src/discover.js';
+import { setHintProvider } from '../src/hint-provider.js';
 import type { Policy } from '../src/write-control.js';
 
 const POLICY: Policy = { profile: 'safe-writes', readOnly: false, allow: [], deny: [] };
@@ -34,6 +35,38 @@ describe('registerDiscoverTools', () => {
     expect(gmail.config.description).toContain('search, send');
   });
 
+  it('caps the description vocabulary: curated listed up to the cap, generated grouped (token diet)', () => {
+    const registered: { name: string; config: { description: string } }[] = [];
+    const server = {
+      registerTool: (name: string, config: never, handler: never) => {
+        registered.push({ name, config });
+        void handler;
+        return 'ok';
+      },
+      sendToolListChanged: vi.fn(),
+      server: { setRequestHandler: () => {} },
+    };
+    const registry = new ToolRegistry(server as never, POLICY);
+    for (let i = 0; i < 15; i++) {
+      registry.registerTool(`big_op${i}`, { description: 'x', inputSchema: { account: z.string() } }, () => {});
+    }
+    for (let i = 0; i < 30; i++) {
+      registry.registerTool(
+        `big_res${i % 5}_m${i}`,
+        { description: 'x', inputSchema: { account: z.string() }, cud: 'read' } as never,
+        () => {},
+      );
+    }
+    registerDiscoverTools(registry, POLICY);
+    const big = registered.find((r) => r.name === 'big_discover')!;
+    // 15 curated ops, cap 10 shown; 30 generated ops compressed to groups.
+    expect(big.config.description).toContain('+5 more');
+    expect(big.config.description).toContain('30 generated ops:');
+    expect(big.config.description).toContain('res0');
+    expect(big.config.description).not.toContain('m29');
+    expect(big.config.description.length).toBeLessThan(600);
+  });
+
   it('discover returns the catalog, reveals the service, and notifies once', async () => {
     const { registry, registered, server } = setup();
     const gmail = registered.find((r) => r.name === 'gmail_discover')!;
@@ -54,15 +87,62 @@ describe('registerDiscoverTools', () => {
     expect(server.sendToolListChanged).toHaveBeenCalledTimes(1);
   });
 
-  it('discover filters by query and hints when nothing matches', async () => {
+  it('next text says to call the tool by exact name, not that it is "now listed and callable"', async () => {
+    const { registered } = setup();
+    const gmail = registered.find((r) => r.name === 'gmail_discover')!;
+    const payload = JSON.parse((await gmail.handler({ query: undefined })).content[0].text);
+    expect(payload.next).not.toContain('is now listed and callable');
+    expect(payload.next).toContain('exact name');
+    expect(payload.next).toContain('tool-search');
+  });
+
+  it('discover filters by query and falls back to a full one-line listing when nothing matches', async () => {
     const { registered } = setup();
     const gmail = registered.find((r) => r.name === 'gmail_discover')!;
 
     const filtered = JSON.parse((await gmail.handler({ query: 'send' })).content[0].text);
     expect(filtered.operations.map((o: { tool: string }) => o.tool)).toEqual(['gmail_send']);
 
-    const empty = JSON.parse((await gmail.handler({ query: 'zzz' })).content[0].text);
-    expect(empty.operations).toEqual([]);
-    expect(empty.next).toContain('without query');
+    const fallback = JSON.parse((await gmail.handler({ query: 'zzz' })).content[0].text);
+    expect(fallback.operations.map((o: { tool: string }) => o.tool)).toEqual(['gmail_search', 'gmail_send']);
+  });
+
+  it('a hint provider renders writeControl via kind policy_summary', async () => {
+    const seen: unknown[] = [];
+    setHintProvider({
+      render: (c) => {
+        seen.push(c);
+        return { hint: `kind:${c.kind}` };
+      },
+    });
+    try {
+      const { registered } = setup();
+      const gmail = registered.find((r) => r.name === 'gmail_discover')!;
+      const payload = JSON.parse((await gmail.handler({ query: undefined })).content[0].text);
+      expect(payload.writeControl).toBe('kind:policy_summary');
+      expect(seen).toEqual([{ kind: 'policy_summary', policy: POLICY }]);
+    } finally {
+      setHintProvider(null);
+    }
+  });
+
+  it('a throwing hint provider falls back to describePolicy, the discover call never rejects (red by mutation: drop the catch in hints())', async () => {
+    const { registered: baseline } = setup();
+    const gmailBaseline = baseline.find((r) => r.name === 'gmail_discover')!;
+    const defaultPayload = JSON.parse((await gmailBaseline.handler({ query: undefined })).content[0].text);
+
+    setHintProvider({
+      render: () => {
+        throw new Error('provider blew up');
+      },
+    });
+    try {
+      const { registered } = setup();
+      const gmail = registered.find((r) => r.name === 'gmail_discover')!;
+      const payload = JSON.parse((await gmail.handler({ query: undefined })).content[0].text);
+      expect(payload.writeControl).toBe(defaultPayload.writeControl);
+    } finally {
+      setHintProvider(null);
+    }
   });
 });

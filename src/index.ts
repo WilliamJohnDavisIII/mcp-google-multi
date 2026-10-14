@@ -1,70 +1,29 @@
 #!/usr/bin/env node
-import './accounts.js';
+// First import: triggers accounts.js module load (env files + registry) before
+// anything else. Named to also pull the server-only empty-registry guard.
+import { assertServerAccountsConfigured } from './accounts.js';
+import { accountsAssertRequired, assertNoEnvAccountsMode, assertNoEnvOptionalScopesMode, isMultiTenantBoot, mtBootGates } from './boot-gates.js';
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { GENERATED_SERVICES } from './tools/generated/index.js';
-import { GENERATED_GATES, SERVICES } from './services.js';
-import { ToolRegistry } from './registry.js';
-import { registerDiscoverTools } from './discover.js';
-import { registerEscapeTools } from './tools/google-api.js';
-import { registerAccountTools } from './tools/accounts-tool.js';
-import { getToolsets, toolsetEnabled } from './toolsets.js';
-import { resolvePolicy, isAllowed, describePolicy, type Policy } from './write-control.js';
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import type { Transport } from "@modelcontextprotocol/server";
+import { resolveDiscoveryMode } from './registry.js';
+import { isAllowed, describePolicy } from './write-control.js';
+import { buildIdentityContext } from './identity.js';
+import { buildRegistry, createMcpServer, requestHooksFor } from './compose.js';
+import { registerSetupPrompt } from './setup-prompt.js';
+import { applyNetTuning } from './net-tuning.js';
+import { withArgNormalization, withValidationEnvelope } from './arg-normalize.js';
+import { envValueSource } from './env-load.js';
+import { loadConfigFile } from './config-file.js';
+import { initUsageMetrics, resolveUsageMetrics, sourceLabel, type Metrics } from './usage-metrics.js';
+
+applyNetTuning();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf-8'));
-
-function buildRegistry(server: McpServer, policy: Policy): ToolRegistry {
-  const registry = new ToolRegistry(server, policy);
-  const toolsets = getToolsets();
-  if (toolsets !== 'all') {
-    const known = new Set([...SERVICES.map((s) => s.name), ...GENERATED_SERVICES.map((s) => s.name)]);
-    for (const requested of toolsets) {
-      if (!known.has(requested)) {
-        process.stderr.write(`GOOGLE_TOOLSETS: unknown service "${requested}" ignored\n`);
-      }
-    }
-  }
-  for (const svc of SERVICES) {
-    if (!toolsetEnabled(toolsets, svc.name)) continue;
-    if (svc.enabled && !svc.enabled()) {
-      if (toolsets !== 'all') {
-        const hint = svc.name === 'admin' ? 'set GOOGLE_ADMIN_ACCOUNTS' : `add "${svc.name}" to GOOGLE_OPTIONAL_SCOPES`;
-        process.stderr.write(`GOOGLE_TOOLSETS: "${svc.name}" requested but not enabled — ${hint}\n`);
-      }
-      continue;
-    }
-    svc.register(registry);
-  }
-  for (const gen of GENERATED_SERVICES) {
-    if (!toolsetEnabled(toolsets, gen.name)) continue;
-    const curated = SERVICES.find((s) => s.name === gen.name);
-    const gate = curated?.enabled ?? GENERATED_GATES[gen.name]?.enabled;
-    if (gate && !gate()) {
-      if (!curated && toolsets !== 'all') {
-        process.stderr.write(`GOOGLE_TOOLSETS: "${gen.name}" requested but not enabled — ${GENERATED_GATES[gen.name].hint}\n`);
-      }
-      continue;
-    }
-    gen.register(registry);
-  }
-  if (registry.services().length === 0) {
-    const known = [...new Set([...SERVICES.map((s) => s.name), ...GENERATED_SERVICES.map((s) => s.name)])].sort();
-    throw new Error(
-      `GOOGLE_TOOLSETS="${process.env.GOOGLE_TOOLSETS ?? ''}" selected no enabled services. ` +
-        `Known services: ${known.join(', ')}. ` +
-        `Note: optional services require their bundle in GOOGLE_OPTIONAL_SCOPES, admin requires GOOGLE_ADMIN_ACCOUNTS.`,
-    );
-  }
-  registerDiscoverTools(registry, policy);
-  registerEscapeTools(registry, policy);
-  registerAccountTools(registry);
-  return registry;
-}
 
 async function main() {
   if (process.argv.includes('auth')) {
@@ -79,11 +38,64 @@ async function main() {
     return;
   }
 
+  if (process.argv.includes('migrate-config')) {
+    const { runMigrateConfig } = await import('./migrate-config.js');
+    runMigrateConfig();
+    return;
+  }
+
+  if (process.argv.includes('doctor')) {
+    const { runDoctorCli } = await import('./doctor.js');
+    process.exitCode = await runDoctorCli(process.argv, pkg.version);
+    return;
+  }
+
+  if (process.argv.includes('reset')) {
+    const { runResetCli } = await import('./doctor.js');
+    process.exitCode = await runResetCli(process.argv);
+    return;
+  }
+
+  if (process.argv.includes('metrics')) {
+    const { runMetricsCli } = await import('./metrics-cli.js');
+    const { GENERATED_METHOD_TOOLS, CURATED_METHOD_IDS } = await import('./tools/generated/method-map.js');
+    const envSrc = envValueSource('GOOGLE_USAGE_METRICS');
+    let configValue: boolean | undefined;
+    try {
+      configValue = loadConfigFile(undefined, 'throw')?.usageMetrics;
+    } catch { /* an invalid config never blocks reading local metrics files */ }
+    const state = resolveUsageMetrics(process.env, configValue, envSrc?.kind === 'file' ? envSrc.file : undefined);
+    process.exitCode = runMetricsCli(process.argv, {
+      enabled: state.enabled,
+      promotion: { methodMap: GENERATED_METHOD_TOOLS, curatedIds: CURATED_METHOD_IDS },
+    });
+    return;
+  }
+
+  if (process.argv.includes('write-client-config')) {
+    const { runWriteClientConfigCli } = await import('./client-config.js');
+    process.exitCode = await runWriteClientConfigCli(process.argv);
+    return;
+  }
+
+  if (process.argv.includes('account') && process.argv.includes('export')) {
+    const { runExportCli } = await import('./registry-transfer.js');
+    process.exitCode = await runExportCli(process.argv);
+    return;
+  }
+
+  if (process.argv.includes('account') && process.argv.includes('import')) {
+    const { runImportCli } = await import('./registry-transfer.js');
+    process.exitCode = await runImportCli(process.argv);
+    return;
+  }
+
   if (process.argv.includes('config') && process.argv.includes('check')) {
-    const policy = resolvePolicy();
+    const ctx = buildIdentityContext();
+    const policy = ctx.policy;
     const registry = buildRegistry(
-      new McpServer({ name: 'mcp-google-multi', version: pkg.version }),
-      policy,
+      createMcpServer(pkg.version),
+      ctx,
     );
     const cud = registry.tools.filter((t) => t.cud !== 'read');
     const disabled = cud.filter((t) => !isAllowed(t, policy));
@@ -103,21 +115,232 @@ async function main() {
     }
     console.log(`Disabled: ${disabledLine}`);
     console.log(`Services: ${registry.services().join(', ')}`);
-    console.log(`Tool surface: ${counts.eager} eager (discover + escape hatch), ${counts.hidden} deferred until discovery`);
+    console.log(`Discovery mode: ${registry.mode}${registry.mode === 'lazy' ? ' (expand at runtime with discover_all)' : ''}`);
+    console.log(`Tool surface: ${counts.eager} eager (discover + escape hatch), ${counts.revealed} advertised, ${counts.hidden} deferred`);
     console.log(`Escape hatch: google_api_call CUD verdicts follow profile=${policy.profile} and your allow/deny globs`);
+    const { getAccountSet } = await import('./accounts.js');
+    const set = getAccountSet();
+    console.log(`Default account: ${set.defaultAccount ? `${set.defaultAccount} (${set.defaultAccountSource})` : '(none — "account" is required per call)'}`);
+    const { peekMasterKeyProvenance } = await import('./master-key.js');
+    const prov = peekMasterKeyProvenance();
+    console.log(`MASTER_KEY: ${prov === 'unprovisioned' ? 'unprovisioned (will be generated on first use)' : prov}`);
+    try {
+      const { resolveHttpConfig, transportIncludesHttp } = await import('./http-config.js');
+      const http = resolveHttpConfig();
+      console.log(`Transport: ${http.transport}`);
+      if (transportIncludesHttp(http.transport)) {
+        console.log(`  HTTP bind: ${http.host}:${http.port}`);
+        console.log(`  Public URL: ${http.publicUrl} (resource ${http.resourceUri})`);
+        console.log(`  Allowed hosts: ${http.allowedHosts.join(', ')}`);
+        console.log(`  Allowed origins: ${http.allowedOrigins.join(', ')}`);
+      }
+    } catch (e) {
+      console.log(`Transport: (config error) ${(e as Error).message}`);
+    }
     return;
   }
 
-  const policy = resolvePolicy();
-  const server = new McpServer({
-    name: 'mcp-google-multi',
-    version: pkg.version,
-  });
-  const registry = buildRegistry(server, policy);
-  registry.installListHandler();
+  // Transport derivation FIRST: the accounts gate below is transport-aware
+  // (a multi-tenant HTTP deploy legitimately boots with zero accounts).
+  const { resolveHttpConfig, transportIncludesHttp } = await import('./http-config.js');
+  let httpCfg;
+  try {
+    httpCfg = resolveHttpConfig();
+  } catch (e) {
+    process.stderr.write(`Fatal: ${(e as Error).message}\n`);
+    process.exit(1);
+  }
+  const wantStdio = httpCfg.transport === 'stdio' || httpCfg.transport === 'both';
+  const wantHttp = transportIncludesHttp(httpCfg.transport);
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // The SERVER never boots with an empty registry (stdio always, HTTP when
+  // single-owner); a multi-tenant boot instead refuses the two process-wide env vectors.
+  const mt = isMultiTenantBoot();
+  if (accountsAssertRequired(wantStdio, mt)) assertServerAccountsConfigured();
+  if (mt) {
+    assertNoEnvAccountsMode();
+    assertNoEnvOptionalScopesMode();
+  }
+
+  // Resolve (or provision) the master key BEFORE serving: the hard guard is
+  // specced "fatal at startup", never mid-dispatch.
+  const { resolveMasterKey } = await import('./master-key.js');
+  resolveMasterKey();
+
+  // One Metrics instance per transport so `boots` keys stay honest under `both`.
+  const envSrc = envValueSource('GOOGLE_USAGE_METRICS');
+  const metricsState = resolveUsageMetrics(
+    process.env,
+    loadConfigFile()?.usageMetrics,
+    envSrc?.kind === 'file' ? envSrc.file : undefined,
+  );
+  if (metricsState.warning) process.stderr.write(metricsState.warning);
+  const metricsInstances: Metrics[] = [];
+  const initMetricsFor = (transport: string, mode: string): Metrics | null => {
+    const m = initUsageMetrics(metricsState, { version: pkg.version as string, mode, transport });
+    if (m) {
+      metricsInstances.push(m);
+      process.stderr.write(`local usage metrics: on ${sourceLabel(metricsState.source)} -> ${m.statusLine()}\n`);
+    }
+    return m;
+  };
+  if (!metricsState.enabled && metricsState.source.kind !== 'default') {
+    process.stderr.write(`local usage metrics: off ${sourceLabel(metricsState.source)}\n`);
+  }
+  const flushMetrics = () => { for (const m of metricsInstances) m.shutdown(); };
+  process.on('exit', flushMetrics);
+  if (metricsState.enabled) {
+    for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+      process.once(sig, () => {
+        flushMetrics();
+        // stdio has no other signal handler; preserve terminate-on-signal.
+        if (!wantHttp) process.exit(sig === 'SIGINT' ? 130 : 143);
+      });
+    }
+  }
+
+  // Build one McpServer + registry per transport at boot (never
+  // rebuilt per request); `both` runs the two concurrently.
+  if (wantStdio) {
+    const server = createMcpServer(pkg.version);
+    const stdioMetrics = initMetricsFor('stdio', resolveDiscoveryMode());
+    const stdioCtx = buildIdentityContext(process.env, { transport: 'stdio' });
+    const registry = buildRegistry(server, stdioCtx, undefined, stdioMetrics);
+    registry.installListHandler();
+    registerSetupPrompt(server);
+    const stdioHooks = requestHooksFor(registry, stdioCtx, stdioMetrics);
+    // Composition order (outbound runs outermost-first): see docs/internals.md (Argument normalization).
+    let transport: Transport = withValidationEnvelope(new StdioServerTransport(), stdioHooks.validationEnvelope);
+    if (stdioMetrics) {
+      const { tapUsageMetrics } = await import('./metrics-tap.js');
+      transport = tapUsageMetrics(transport, stdioMetrics, (n) => registry.hasTool(n));
+    }
+    await server.connect(
+      stdioHooks.argShapeFor || stdioHooks.strictArgs
+        ? withArgNormalization(
+            transport,
+            // Gated exactly as the HTTP leg gates argShapeFor, or GOOGLE_ARG_NORMALIZE=off
+            // would rename keys on stdio while HTTP's screening rejects the same call.
+            stdioHooks.argShapeFor ?? (() => undefined),
+            undefined,
+            stdioMetrics ? (tool, n) => stdioMetrics.recordArgFix(tool, n) : undefined,
+            stdioHooks.strictArgs,
+          )
+        : transport,
+    );
+  }
+
+  if (wantHttp) {
+    const { HttpTransportHost, parseOwnerEmails } = await import('./http-transport.js');
+    const owners = parseOwnerEmails(process.env);
+    const gates = mtBootGates();
+    if (gates?.multiTenant) {
+      // Same fail-fast shape as below, but the gate is "a valid provisioning
+      // mechanism exists", not a flat owner allowlist.
+      gates.assertProvisioningGate();
+    } else {
+      // The owner allowlist is the entire multi-tenant collapse;
+      // refuse to open an ungated HTTP endpoint.
+      if (owners.length === 0) {
+        process.stderr.write(
+          'E_OWNER_EMAILS_REQUIRED: MCP_TRANSPORT includes http but MCP_OWNER_EMAILS is empty. Set MCP_OWNER_EMAILS to the Google email(s) allowed to authenticate.\n',
+        );
+        process.exit(1);
+      }
+    }
+    // Stateless HTTP cannot push tools/list_changed, so it forces curated.
+    const configuredMode = (process.env.GOOGLE_DISCOVERY ?? '').trim().toLowerCase();
+    if (configuredMode && configuredMode !== 'curated') {
+      process.stderr.write(`GOOGLE_DISCOVERY="${configuredMode}" is ignored over HTTP; the stateless transport forces "curated".\n`);
+    }
+    const httpServer = createMcpServer(pkg.version);
+    const httpMetrics = initMetricsFor('http', 'curated');
+    const httpCtx = buildIdentityContext(process.env, { transport: 'http' });
+    const registry = buildRegistry(httpServer, httpCtx, 'curated', httpMetrics);
+    registry.installListHandler();
+    registerSetupPrompt(httpServer);
+
+    // Mount the OAuth 2.1 AS (MCP-client tokens + owner login) + the Bearer authenticator.
+    const { buildAuthServer, verifiedEmailFromIdToken } = await import('./oauth-as.js');
+    const { jwtSecretFrom } = await import('./mcp-token.js');
+    const { resolveJwtKey, resolveMasterKeyForDispatch } = await import('./master-key.js');
+    const { OAuth2Client } = await import('googleapis-common');
+    const { readToken, writeToken } = await import('./token-store.js');
+    const { resolveScopesForAccount } = await import('./auth.js');
+    const { ownerAuthUrlOptions } = await import('./oauth-consent.js');
+    const { scopeGrantDiff, setWizardHttpConsent } = await import('./tools/account-wizard.js');
+    const { configDir } = await import('./config-file.js');
+    const { getAccountSet } = await import('./accounts.js');
+    const googleClient = () =>
+      new OAuth2Client(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, `${httpCfg.publicUrl}/callback`);
+    const authServer = buildAuthServer(
+      {
+        base: httpCfg.publicUrl,
+        resourceUri: httpCfg.resourceUri,
+        secret: jwtSecretFrom(resolveJwtKey().key),
+        ownerEmails: owners,
+        cimdIssuers: (process.env.MCP_CIMD_ALLOWED_ISSUERS ?? 'claude.ai').split(',').map((s) => s.trim()).filter(Boolean),
+        accessTtlSec: Number(process.env.MCP_ACCESS_TTL) || undefined,
+        masterKey: resolveMasterKeyForDispatch().key,
+        refreshStorePath: path.join(configDir(), 'mcp-tokens.enc'),
+      },
+      {
+        buildGoogleAuthUrl: ({ flow, alias, state }) =>
+          googleClient().generateAuthUrl(ownerAuthUrlOptions({ flow, alias, state }, (a) => resolveScopesForAccount(a))),
+        exchangeCode: async (code, flow) => {
+          const { tokens } = await googleClient().getToken(code);
+          const email = verifiedEmailFromIdToken(tokens.id_token ?? undefined);
+          // owner_gate discards Google tokens (identity proof only); alias_reauth
+          // keeps them but still needs the email for the identity binding.
+          return { tokens: flow === 'owner_gate' ? {} : (tokens as Record<string, unknown>), email };
+        },
+        writeToken: (alias, tokens) => writeToken(alias, tokens),
+        missingScopes: (alias, granted) => scopeGrantDiff(resolveScopesForAccount(alias), granted),
+        hasToken: (alias) => {
+          try {
+            return readToken(alias) != null;
+          } catch {
+            return false; // undecryptable: nothing usable to keep
+          }
+        },
+        aliasEmail: (alias) => getAccountSet().configs[alias]?.email,
+        log: (l) => process.stderr.write(`[as] ${l}\n`),
+      },
+    );
+    // Over HTTP, a dead/missing per-account token surfaces a clickable,
+    // signed re-auth link into the AS's alias_reauth flow instead of a CLI hint.
+    const { setHttpReauthLink } = await import('./reauth-hint.js');
+    setHttpReauthLink((alias) => authServer.reauthLink(alias));
+    // Wizard consent over HTTP: hand out the same signed link instead of
+    // binding a loopback listener.
+    setWizardHttpConsent({ mintConsentUrl: (alias) => authServer.reauthLink(alias) });
+
+    let httpTap: ((t: Transport) => Transport) | undefined;
+    if (httpMetrics) {
+      const { tapUsageMetrics } = await import('./metrics-tap.js');
+      httpTap = (t) => tapUsageMetrics(t, httpMetrics, (n) => registry.hasTool(n));
+    }
+    const host = new HttpTransportHost({
+      server: httpServer,
+      config: httpCfg,
+      version: pkg.version,
+      ownerConfigured: owners.length > 0,
+      authenticate: authServer.authenticate,
+      routes: authServer.routes,
+      log: (l) => process.stderr.write(`[http] ${l}\n`),
+      ...requestHooksFor(registry, httpCtx, httpMetrics),
+      metricsTap: httpTap,
+      onArgRename: httpMetrics ? (tool: string, n: number) => httpMetrics.recordArgFix(tool, n) : undefined,
+    });
+    await host.start();
+    process.stderr.write(`HTTP transport listening on http://${httpCfg.host}:${httpCfg.port} (public ${httpCfg.publicUrl})\n`);
+    // Graceful shutdown so `docker run --init` forwards SIGTERM cleanly.
+    const shutdown = () => {
+      host.close().finally(() => process.exit(0));
+    };
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
+  }
 }
 
 main().catch((err) => {

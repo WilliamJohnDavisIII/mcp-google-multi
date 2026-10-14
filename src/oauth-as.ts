@@ -1,0 +1,859 @@
+// The minimal OAuth 2.1 Authorization Server + Resource Server: federate-and-hold
+// (own token / discarded owner login / held per-alias tokens). See docs/internals.md.
+
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { isIPv4 } from 'node:net';
+import { decodeJwt } from 'jose';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { AuthOutcome, RouteHandler } from './http-transport.js';
+import {
+  signAccessToken, verifyAccessToken, signState, verifyState, signAuthzCode, verifyAuthzCode,
+  signReauthLink, verifyReauthLink,
+  signPending, verifyPending,
+  ReplayGuard, type ReplaySpend, RefreshStore, STATE_TTL_DEFAULT, CODE_TTL_DEFAULT, ACCESS_TTL_DEFAULT,
+  type StatePayload, clientFingerprint, refreshMacKey,
+} from './mcp-token.js';
+import { fetchCimdDocument } from './ssrf-guard.js';
+import { CimdClientCache } from './cimd-cache.js';
+import { logSafe } from './trim.js';
+
+const CLAUDE_AI_FIXED_CALLBACK = 'https://claude.ai/api/mcp/auth_callback';
+
+// /register is public and unauthenticated, so its store must stay bounded
+// (FIFO-evict the oldest) like every sibling store, or a request loop OOMs.
+export const DCR_MAX_CLIENTS = 1000;
+export const DCR_MAX_REDIRECT_URIS = 10;
+const DCR_MAX_URI_LEN = 2048;
+
+export interface GoogleExchangeResult {
+  tokens: Record<string, unknown>;
+  email?: string;
+  /** Google's stable account id; unlike the address it is never reassigned. */
+  sub?: string;
+  /** Google Workspace hosted domain; absent for a consumer account. */
+  hd?: string;
+}
+
+export interface AuthServerConfig {
+  base: string;
+  resourceUri: string; // `${base}/mcp`
+  secret: Uint8Array;
+  ownerEmails: string[]; // lowercased
+  cimdIssuers: string[]; // host allowlist, e.g. ['claude.ai']
+  accessTtlSec?: number;
+  masterKey: string;
+  refreshStorePath: string;
+  /** `maxAgeSec` of the refresh store buildAuthServer creates: sessions end
+   * this long after their sign-in. Unset: unlimited. */
+  refreshMaxAgeSec?: number;
+  /** `idleSec` of that store: sessions end this long after their last
+   * refresh. Unset: unlimited. */
+  refreshIdleSec?: number;
+  /** `maxFamiliesPerSub` of that store: bounds how many live refresh-token
+   * families one subject may hold, dropping its least-recently-used one to
+   * make room. Unset: unlimited. */
+  refreshMaxFamiliesPerSub?: number;
+  /** Default true. The clientless `flow=alias_reauth` link names an alias with
+   * no tenant binding, so a multi-tenant deployment sets false: with several
+   * tenants an alias name alone is ambiguous and the branch becomes a
+   * cross-tenant re-auth vector. Server-minted alias_add flows are unaffected. */
+  legacyAliasReauth?: boolean;
+}
+
+/** What /callback hands the alias_add binder once Google returned a verified
+ * identity for a server-minted link. */
+export interface TenantAliasBind {
+  tenantId: string;
+  alias: string;
+  email: string;
+  bundles?: string[];
+  nonce?: string;
+  tokens: Record<string, unknown>;
+  sub?: string;
+}
+
+/** A binder's deliberate refusal (policy, not failure): /callback answers 403
+ * with this slug and message. The message reaches an unauthenticated browser. */
+export interface AliasBindRefusal {
+  refused: { slug: string; message: string };
+}
+
+export interface GoogleIdentity {
+  email?: string;
+  sub?: string;
+  hd?: string;
+}
+
+const OIDC_SUB = /^[\x21-\x7e]{1,255}$/;
+const HOSTED_DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
+
+// RFC 6749 error_description charset (%x20-21/%x23-5B/%x5D-7E); a denial
+// description outside it is dropped rather than forwarded unvalidated.
+const ERROR_DESCRIPTION_RE = /^[\x20-\x21\x23-\x5b\x5d-\x7e]{1,200}$/;
+
+/** Only trust the id_token identity when Google marks the email verified.
+ * The token comes straight from Google's token endpoint, so its claims are
+ * read unsigned. A malformed sub or hd is dropped, never passed on. */
+export function verifiedIdentityFromIdToken(idToken?: string | null): GoogleIdentity | undefined {
+  if (!idToken) return undefined;
+  try {
+    const [, payload] = idToken.split('.');
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8')) as { email?: string; email_verified?: boolean | string; sub?: unknown; hd?: unknown };
+    const verified = claims.email_verified === true || claims.email_verified === 'true';
+    if (!verified) return undefined;
+    const identity: GoogleIdentity = { email: claims.email };
+    if (typeof claims.sub === 'string' && OIDC_SUB.test(claims.sub)) identity.sub = claims.sub;
+    if (typeof claims.hd === 'string' && claims.hd.length <= 253 && HOSTED_DOMAIN.test(claims.hd)) identity.hd = claims.hd;
+    return identity;
+  } catch {
+    return undefined;
+  }
+}
+
+export function verifiedEmailFromIdToken(idToken?: string | null): string | undefined {
+  return verifiedIdentityFromIdToken(idToken)?.email;
+}
+
+export interface AuthServerDeps {
+  fetchCimd?: (clientId: string) => Promise<Record<string, unknown>>;
+  /** Exchange a Google auth code at `${base}/callback` for tokens (+ owner email). */
+  exchangeCode?: (code: string, flow: StatePayload['flow']) => Promise<GoogleExchangeResult>;
+  /** Build the Google authorization URL (redirect back to `${base}/callback`).
+   *  The impl chooses scope/prompt from the flow: owner_gate = `openid email`
+   *  + select_account; alias_reauth = the alias's resource scopes + select_account
+   *  consent, and no login_hint (the link needs no authentication). */
+  buildGoogleAuthUrl?: (opts: { flow: StatePayload['flow']; alias?: string; state: string; bundles?: string[] }) => string;
+  writeToken?: (alias: string, tokens: Record<string, unknown>) => void;
+  /** Scopes the alias asked for that `grantedScope` lacks, so the alias_reauth
+   * completion page can say what Google's granular consent left out. */
+  missingScopes?: (alias: string, grantedScope: string | undefined) => string[];
+  /** Whether a readable token is stored for the alias; a narrower re-auth
+   * grant keeps it rather than replace it. */
+  hasToken?: (alias: string) => boolean;
+  registeredClients?: Map<string, { redirect_uris: string[] }>;
+  replayGuard?: ReplayGuard;
+  refreshStore?: RefreshStore;
+  /** The presenting client's address, for the refresh-rotation fingerprint
+   * (clientFingerprint) that tells a concurrent duplicate request from a
+   * different holder of the same token. Default: the socket's remote
+   * address. A host behind a trusted proxy wires its own resolver here. */
+  clientAddress?: (req: IncomingMessage) => string | undefined;
+  now?: () => number; // ms
+  /** Server-side log (never sent to callers) for auth failures / SSRF blocks. */
+  log?: (line: string) => void;
+  /** The alias's configured Google email, for the alias_reauth identity binding. */
+  aliasEmail?: (alias: string) => string | undefined;
+  /** Map a verified sign-in email to the subject its tokens are minted under.
+   * Default = the MCP_OWNER_EMAILS allowlist -> {sub:'owner'}; null = denied.
+   * The tenant resolver (invite claim / email->tenant lookup) plugs in here.
+   * `identity` carries Google's `sub` and `hd` when the exchange returned
+   * them, so a resolver can key on the stable account id rather than an
+   * address that can be reassigned. */
+  resolveSubject?: (
+    email: string,
+    identity?: { sub?: string; hd?: string },
+  ) => { sub: string } | null | { denied: { description: string } };
+  /** alias_add completion: persist the new alias's config row and tokens under
+   * its tenant. /callback awaits it only after a successful Google exchange.
+   * A returned refusal answers 403 with its slug; a throw or rejection answers
+   * 500 E_ALIAS_ADD_FAILED. */
+  bindTenantAlias?: (bind: TenantAliasBind) => void | AliasBindRefusal | Promise<void | AliasBindRefusal>;
+  /** False for a subject this host no longer serves (a multi-tenant host that
+   * removed or suspended it): /token then issues and rotates nothing for it
+   * (400 invalid_grant; a rotated sub's refresh tokens are dropped). A throw
+   * means the answer is unknown right now: 503 temporarily_unavailable, and
+   * the presented refresh token is not spent. Absent: every subject is active. */
+  subjectActive?: (sub: string) => boolean;
+}
+
+export interface AuthServer {
+  routes: Record<string, RouteHandler>;
+  authenticate: (req: IncomingMessage) => Promise<AuthOutcome>;
+  /** Mint a signed, single-use, TTL-bound clientless flow URL
+   * (`${base}/authorize?flow=...&state=<signed>`). The tenantId/bundles ride
+   * INSIDE the signed state, so nothing at /authorize or /callback trusts a
+   * caller-supplied identity. The URL works only on this AuthServer, and only
+   * until its process restarts: sign-in artifacts are signed with a key each
+   * buildAuthServer call generates. Inert unless something calls it. */
+  mintFlowState: (opts: { flow: 'alias_add'; alias: string; tenantId?: string; bundles?: string[]; nonce?: string }) => Promise<string>;
+  /** The owner's re-auth link for `alias`: HMAC-signed, expiring, not single
+   * use (a chat client may prefetch it). /authorize refuses any alias_reauth
+   * request without a valid one, so an unauthenticated caller can neither
+   * start a re-auth nor learn which aliases exist or what they hold. */
+  reauthLink: (alias: string) => string;
+}
+
+// --- helpers ----------------------------------------------------------------
+
+function json(res: ServerResponse, status: number, body: unknown, extraHeaders: Record<string, string> = {}): true {
+  res.writeHead(status, { 'Content-Type': 'application/json', ...extraHeaders });
+  res.end(JSON.stringify(body));
+  return true;
+}
+
+function errorPage(res: ServerResponse, status: number, slug: string, message: string, extraHeaders: Record<string, string> = {}): true {
+  res.writeHead(status, { 'Content-Type': 'text/plain', ...extraHeaders });
+  res.end(`${slug}: ${message}`);
+  return true;
+}
+
+class SubjectCheckUnavailable extends Error {}
+
+function subjectUnavailable(res: ServerResponse): true {
+  return json(res, 503, { error: 'temporarily_unavailable', message: 'the sign-in could not be checked right now; retry shortly' }, { 'Retry-After': '5' });
+}
+
+// Not invalid_client: clients and people read that as a permanent misconfiguration.
+function clientUnavailable(res: ServerResponse): true {
+  return json(res, 503, { error: 'temporarily_unavailable', message: 'the client could not be checked right now; retry shortly' }, { 'Retry-After': '5' });
+}
+
+// The replay guard is full: every slot holds a jti that is still live.
+function signInBusy(res: ServerResponse): true {
+  return errorPage(res, 503, 'E_SIGNIN_BUSY', 'sign-in is busy right now; retry in a minute', { 'Retry-After': '60' });
+}
+
+function redirect(res: ServerResponse, location: string, extraHeaders: Record<string, string> = {}): true {
+  res.writeHead(302, { Location: location, ...extraHeaders });
+  res.end();
+  return true;
+}
+
+function isLoopbackHostname(h: string): boolean {
+  const host = h.replace(/^\[|\]$/g, '').toLowerCase();
+  if (host === 'localhost' || host === '::1' || host === '::ffff:127.0.0.1') return true;
+  // 127.0.0.0/8 — must be a genuine IPv4 literal in range, NOT merely a "127."
+  // prefix (which would let "127.evil.com" masquerade as loopback).
+  return isIPv4(host) && host.split('.')[0] === '127';
+}
+
+/** Exact redirect_uri match, with RFC 8252 §7.3 port-agnostic loopback and
+ *  the fixed claude.ai callback. */
+export function redirectAllowed(redirectUri: string, docRedirectUris: string[]): boolean {
+  if (redirectUri === CLAUDE_AI_FIXED_CALLBACK) return true;
+  if (docRedirectUris.includes(redirectUri)) return true;
+  let r: URL;
+  try {
+    r = new URL(redirectUri);
+  } catch {
+    return false;
+  }
+  if (!isLoopbackHostname(r.hostname)) return false; // non-loopback must be exact
+  return docRedirectUris.some((d) => {
+    let du: URL;
+    try {
+      du = new URL(d);
+    } catch {
+      return false;
+    }
+    // any loopback host + any port + same scheme + same path
+    return isLoopbackHostname(du.hostname) && du.protocol === r.protocol && du.pathname === r.pathname;
+  });
+}
+
+// Owner-gate browser binding: one cookie per flow; see docs/internals.md.
+const BIND_HASH = /^[A-Za-z0-9_-]{43}$/;
+
+function bindCookieName(base: string, bind: string): string {
+  return `${base.startsWith('https:') ? '__Host-' : ''}mgm-og-${bind.slice(0, 16)}`;
+}
+
+function bindCookieAttrs(base: string, maxAge: number): string {
+  return `Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${base.startsWith('https:') ? '; Secure' : ''}`;
+}
+
+function readCookie(req: IncomingMessage, name: string): string | undefined {
+  for (const part of (req.headers.cookie ?? '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return undefined;
+}
+
+function sha256Url(value: string): string {
+  return createHash('sha256').update(value).digest('base64url');
+}
+
+function browserBinding(req: IncomingMessage, base: string, bind: unknown): 'ok' | 'missing' | 'mismatch' {
+  if (typeof bind !== 'string' || !BIND_HASH.test(bind)) return 'missing';
+  const value = readCookie(req, bindCookieName(base, bind));
+  if (!value) return 'missing';
+  const got = createHash('sha256').update(value).digest();
+  const want = Buffer.from(bind, 'base64url');
+  return got.length === want.length && timingSafeEqual(got, want) ? 'ok' : 'mismatch';
+}
+
+function pkceS256(verifier: string): string {
+  return createHash('sha256').update(verifier).digest('base64url');
+}
+
+function readBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > maxBytes) {
+        reject(new Error('body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+    req.on('error', reject);
+  });
+}
+
+function parseForm(raw: string, contentType: string | undefined): Record<string, string> {
+  if (contentType?.includes('application/json')) {
+    try {
+      const obj = JSON.parse(raw) as Record<string, unknown>;
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(obj)) out[k] = String(v);
+      return out;
+    } catch {
+      return {};
+    }
+  }
+  const out: Record<string, string> = {};
+  for (const [k, v] of new URLSearchParams(raw)) out[k] = v;
+  return out;
+}
+
+// --- the AS -----------------------------------------------------------------
+
+export function buildAuthServer(config: AuthServerConfig, deps: AuthServerDeps = {}): AuthServer {
+  const base = config.base;
+  const resource = config.resourceUri;
+  const secret = config.secret;
+  // States/approvals/codes are signed with a per-process secret; see docs/internals.md.
+  const flowSecret = new Uint8Array(randomBytes(32));
+  const accessTtl = config.accessTtlSec ?? ACCESS_TTL_DEFAULT;
+  const cimd = deps.fetchCimd ?? ((clientId: string) => fetchCimdDocument(clientId));
+  const replay = deps.replayGuard ?? new ReplayGuard();
+  const registered = deps.registeredClients ?? new Map<string, { redirect_uris: string[] }>();
+  const now = deps.now ?? (() => Date.now());
+  const log = deps.log ?? (() => undefined);
+  const clientAddress = deps.clientAddress ?? ((req: IncomingMessage) => req.socket.remoteAddress);
+  // Not used for authorization, only to tell a concurrent duplicate /token
+  // request from a different holder of the same refresh token; keyed on the
+  // refresh store's own MAC key so a reader of the store file cannot
+  // brute-force the client_id/user-agent/address that produced a stored `by`.
+  // See docs/internals.md.
+  const fingerprintKey = refreshMacKey(config.masterKey);
+  const fingerprintOf = (req: IncomingMessage, clientId: string): string =>
+    clientFingerprint(clientId, req.headers['user-agent'] ?? '', clientAddress(req) ?? '', fingerprintKey);
+  // Silently dropping a lifetime the caller asked for would leave sessions unlimited.
+  if (deps.refreshStore && (config.refreshMaxAgeSec !== undefined || config.refreshIdleSec !== undefined || config.refreshMaxFamiliesPerSub !== undefined)) {
+    throw new Error('E_REFRESH_OPTION_CONFLICT: refreshMaxAgeSec, refreshIdleSec and refreshMaxFamiliesPerSub configure the refresh store buildAuthServer creates; set them on the injected refreshStore instead');
+  }
+  const refresh =
+    deps.refreshStore ?? new RefreshStore(config.refreshStorePath, config.masterKey, { maxAgeSec: config.refreshMaxAgeSec, idleSec: config.refreshIdleSec, maxFamiliesPerSub: config.refreshMaxFamiliesPerSub, log });
+  const nowSec = () => Math.floor(now() / 1000);
+  // A full guard is refused at whatever rate the caller likes, so its line is
+  // written at most once a minute (or at once after the clock stepped back).
+  let fullLoggedAt = -Infinity;
+  let fullSuppressed = 0;
+  const noteFull = (at: number): void => {
+    if (at >= fullLoggedAt && at - fullLoggedAt < 60_000) {
+      fullSuppressed++;
+      return;
+    }
+    log(`replay guard full: sign-in refused${fullSuppressed > 0 ? ` (n=${fullSuppressed} suppressed)` : ''}`);
+    fullLoggedAt = at;
+    fullSuppressed = 0;
+  };
+  const spend = (artifact: { jti: string; exp: number }, ttlSec: number): ReplaySpend => {
+    const at = now();
+    const r = replay.spend(artifact.jti, ttlSec * 1000, at, artifact.exp * 1000);
+    if (r === 'full') noteFull(at);
+    return r;
+  };
+  const resolveSubject = deps.resolveSubject ?? ((email: string) => (config.ownerEmails.includes(email) ? { sub: 'owner' } : null));
+  const issHeader = { 'Cache-Control': 'no-store' };
+
+  const prm = {
+    resource,
+    authorization_servers: [base],
+    scopes_supported: ['mcp:use'],
+    bearer_methods_supported: ['header'],
+  };
+  const asMetadata = {
+    issuer: base,
+    authorization_endpoint: `${base}/authorize`,
+    token_endpoint: `${base}/token`,
+    registration_endpoint: `${base}/register`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['none'],
+    client_id_metadata_document_supported: true,
+    authorization_response_iss_parameter_supported: true,
+    scopes_supported: ['mcp:use'],
+  };
+
+  const cimdClients = new CimdClientCache({ fetch: cimd, now, log });
+
+  async function validateClient(clientId: string): Promise<{ redirect_uris: string[]; dcr: boolean } | { error: string; message: string } | { busy: true }> {
+    const reg = registered.get(clientId);
+    if (reg) return { redirect_uris: reg.redirect_uris, dcr: true };
+    // Validate the issuer host + scheme BEFORE any outbound fetch, so we
+    // only ever fetch an allowlisted issuer (no arbitrary-URL SSRF surface).
+    let issuerHost: string;
+    let scheme: string;
+    try {
+      const u = new URL(clientId);
+      issuerHost = u.hostname;
+      scheme = u.protocol;
+    } catch {
+      return { error: 'E_CIMD_INVALID', message: 'invalid client' };
+    }
+    if (scheme !== 'https:' || !config.cimdIssuers.includes(issuerHost)) {
+      // The issuer and a length, never the path: an attacker picks the path freely.
+      log(`CIMD rejected: issuer=${logSafe(`${scheme}//${issuerHost}`, 80)} not allowlisted client_id_len=${clientId.length}`);
+      return { error: 'E_CIMD_INVALID', message: 'invalid client' };
+    }
+    // Cached only once it validates; the cache logs a failed fetch.
+    const got = await cimdClients.resolve(
+      clientId,
+      (doc) => doc.client_id === clientId && Array.isArray(doc.redirect_uris) && doc.redirect_uris.length > 0,
+    );
+    if ('busy' in got) return got;
+    // Never echo internal fetch details to the caller (blind-SSRF oracle).
+    if ('error' in got) return { error: got.error, message: 'invalid client' };
+    const uris = got.doc.redirect_uris as string[];
+    // Warn on a localhost-only redirect set (loopback impersonation),
+    // once per fetch rather than on every sign-in the cache serves.
+    if (got.fresh && uris.every((u) => { try { return isLoopbackHostname(new URL(u).hostname); } catch { return false; } })) {
+      log(`client ${logSafe(clientId, 128)} advertises only loopback redirect_uris`);
+    }
+    return { redirect_uris: uris, dcr: false };
+  }
+
+  function escapeHtml(s: string): string {
+    return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+  }
+
+  /** `incoming`: the artifact spent to get here. If no slot is left for the
+   * new state it is unspent, so retrying it works once a slot frees. */
+  async function toGoogle(res: ServerResponse, sp: StatePayload, incoming?: string): Promise<true> {
+    // Without this, a Google URL minted here and forwarded to someone
+    // else signs THEM in and hands their subject to the starting client.
+    const headers: Record<string, string> = {};
+    if (sp.flow === 'owner_gate') {
+      const value = randomBytes(32).toString('base64url');
+      const bind = sha256Url(value);
+      sp = { ...sp, bind };
+      headers['Set-Cookie'] = `${bindCookieName(base, bind)}=${value}; ${bindCookieAttrs(base, STATE_TTL_DEFAULT)}`;
+    }
+    const state = await signState(sp, base, flowSecret, nowSec());
+    // Its /callback must find a slot even while a flood fills the guard, or a
+    // refusal there (the browser binding) could not be recorded.
+    const at = now();
+    if (replay.reserve(String(decodeJwt(state).jti), STATE_TTL_DEFAULT * 1000, at) === 'full') {
+      if (incoming) replay.unspend(incoming);
+      noteFull(at);
+      return signInBusy(res);
+    }
+    const authUrl = deps.buildGoogleAuthUrl
+      ? deps.buildGoogleAuthUrl({ flow: sp.flow, alias: sp.alias, state, bundles: sp.bundles })
+      : `https://accounts.google.com/o/oauth2/v2/auth?state=${encodeURIComponent(state)}`;
+    return redirect(res, authUrl, headers);
+  }
+
+  const authorize: RouteHandler = async (req, res, url) => {
+    if (req.method === 'POST') {
+      let form: Record<string, string>;
+      try {
+        form = parseForm(await readBody(req), req.headers['content-type']);
+      } catch {
+        return errorPage(res, 400, 'invalid_request', 'bad form');
+      }
+      let pending: StatePayload & { jti: string; exp: number };
+      try {
+        pending = await verifyPending(form.pending ?? '', base, flowSecret, nowSec());
+      } catch {
+        return errorPage(res, 400, 'E_STATE_INVALID', 'the approval is invalid or expired');
+      }
+      // Defence in depth: a pending from an earlier release, which could carry
+      // flow=alias_reauth, was signed with MCP_JWT_KEY and no longer verifies.
+      if (pending.flow !== 'owner_gate') {
+        return errorPage(res, 400, 'E_STATE_INVALID', 'the approval is invalid or expired');
+      }
+      const spent = spend(pending, STATE_TTL_DEFAULT);
+      if (spent === 'full') return signInBusy(res);
+      if (spent === 'replay') return errorPage(res, 400, 'E_STATE_INVALID', 'this approval was already used');
+      const { jti: _drop, ...sp } = pending;
+      void _drop;
+      return toGoogle(res, sp as StatePayload, pending.jti);
+    }
+    const q = url.searchParams;
+    const clientId = q.get('client_id') ?? '';
+    const redirectUri = q.get('redirect_uri') ?? '';
+    const codeChallenge = q.get('code_challenge') ?? '';
+    const method = q.get('code_challenge_method') ?? '';
+    const resourceParam = q.get('resource') ?? '';
+    const clientState = q.get('state') ?? undefined;
+    const aliasParam = q.get('alias') ?? undefined;
+
+    // alias_add: tenant/alias/bundles live inside the SIGNED state, verified
+    // and spent single-use before re-signing for Google; a caller can't tamper with them.
+    if (q.get('flow') === 'alias_add' && !clientId) {
+      let minted: StatePayload & { jti: string; exp: number };
+      try {
+        minted = await verifyState(q.get('state') ?? '', base, flowSecret, nowSec());
+      } catch {
+        return errorPage(res, 400, 'E_STATE_INVALID', 'the add-account link is invalid, expired, or tampered');
+      }
+      if (minted.flow !== 'alias_add' || !minted.alias || !minted.tenantId) {
+        return errorPage(res, 400, 'E_STATE_INVALID', 'the add-account link is malformed');
+      }
+      const spent = spend(minted, STATE_TTL_DEFAULT);
+      if (spent === 'full') return signInBusy(res);
+      if (spent === 'replay') return errorPage(res, 400, 'E_STATE_INVALID', 'this add-account link was already used');
+      const { jti: _spent, ...sp } = minted;
+      void _spent;
+      return toGoogle(res, sp as StatePayload, minted.jti);
+    }
+
+    // alias_reauth skips client_id/redirect/PKCE (no client leg); see docs/internals.md.
+    if (q.get('flow') === 'alias_reauth' && !clientId) {
+      if (config.legacyAliasReauth === false) {
+        // Alias-only, tenant-ambiguous: disabled on multi-tenant deployments.
+        return errorPage(res, 403, 'E_LEGACY_REAUTH_DISABLED', 'alias re-auth links are disabled on this deployment; ask the server for a fresh account link');
+      }
+      const alias = verifyReauthLink(base, secret, { alias: aliasParam ?? '', exp: q.get('exp') ?? '', sig: q.get('sig') ?? '' }, nowSec());
+      // One answer for an unsigned, forged, expired or stale link, so a
+      // request the server did not issue learns nothing about its aliases.
+      if (!alias || !deps.aliasEmail?.(alias)) {
+        return errorPage(res, 400, 'E_STATE_INVALID', 'this re-auth link is invalid or expired; ask the server for a fresh one');
+      }
+      return toGoogle(res, { flow: 'alias_reauth', client_id: '', redirect_uri: '', code_challenge: '', resource, alias });
+    }
+
+    if (!clientId) return json(res, 400, { error: 'invalid_request', message: 'client_id required', iss: base }, issHeader);
+    const client = await validateClient(clientId);
+    if ('busy' in client) return clientUnavailable(res);
+    if ('error' in client) return json(res, 400, { error: 'invalid_client', message: client.message, iss: base }, issHeader);
+
+    // Exact redirect_uri match BEFORE minting anything (open-redirect defense).
+    if (!redirectUri || !redirectAllowed(redirectUri, client.redirect_uris)) {
+      return errorPage(res, 400, 'E_REDIRECT_URI_MISMATCH', 'redirect_uri is not an allowed callback for this client');
+    }
+    if (!codeChallenge || method !== 'S256') {
+      return json(res, 400, { error: 'invalid_request', message: 'code_challenge with S256 required', iss: base }, issHeader);
+    }
+    if (resourceParam !== resource) {
+      return json(res, 400, { error: 'invalid_request', message: `resource must be ${resource}`, iss: base }, issHeader);
+    }
+    // Only after full validation, and always as owner_gate: a caller-supplied
+    // flow here would let any client read an alias's scopes via alias_reauth.
+    const statePayload: StatePayload = {
+      flow: 'owner_gate',
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      code_challenge: codeChallenge,
+      client_state: clientState,
+      resource,
+    };
+    // DCR clients get a consent interstitial naming the client + destination
+    // (confused-deputy defense); CIMD clients skip it. See docs/internals.md.
+    if (client.dcr) {
+      const pendingToken = await signPending(statePayload, base, flowSecret, nowSec());
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "frame-ancestors 'none'", 'X-Frame-Options': 'DENY' });
+      res.end(
+        `<!doctype html><meta charset=utf-8><title>Authorize access</title>` +
+          `<body style="font-family:system-ui,sans-serif;max-width:36em;margin:3em auto;line-height:1.5">` +
+          `<h2>Authorize access?</h2>` +
+          `<p>An application (<code>${escapeHtml(clientId)}</code>) asks to connect to this server as you.</p>` +
+          `<p>If approved, it will receive an authorization redirected to:<br><code>${escapeHtml(redirectUri)}</code></p>` +
+          `<p><strong>If you did not start this, close this window.</strong></p>` +
+          `<form method="POST" action="/authorize"><input type="hidden" name="pending" value="${escapeHtml(pendingToken)}">` +
+          `<button type="submit" style="font-size:1em;padding:.5em 1.5em">Approve</button></form></body>`,
+      );
+      return true;
+    }
+    return toGoogle(res, statePayload);
+  };
+
+  const callback: RouteHandler = async (req, res, url) => {
+    const code = url.searchParams.get('code') ?? '';
+    const stateToken = url.searchParams.get('state') ?? '';
+    let st: StatePayload & { jti: string; exp: number };
+    try {
+      st = await verifyState(stateToken, base, flowSecret, nowSec());
+    } catch {
+      return errorPage(res, 400, 'E_STATE_INVALID', 'state is invalid, expired, or tampered');
+    }
+    const spent = spend(st, STATE_TTL_DEFAULT);
+    if (spent === 'full') return signInBusy(res);
+    if (spent === 'replay') return errorPage(res, 400, 'E_STATE_INVALID', 'state has already been used (replay)');
+    // After the spend, so a refused callback URL cannot be replayed from the
+    // browser that holds the cookie; before the exchange and resolveSubject.
+    if (st.flow === 'owner_gate') {
+      const binding = browserBinding(req, base, st.bind);
+      if (binding !== 'ok') {
+        log(`callback refused flow=owner_gate: browser binding ${binding}`);
+        return errorPage(res, 400, 'E_BROWSER_MISMATCH', 'finish the sign-in in the browser that started it; start again from your app');
+      }
+      res.setHeader('Set-Cookie', `${bindCookieName(base, st.bind ?? '')}=; ${bindCookieAttrs(base, 0)}`);
+    }
+    if (!code) return errorPage(res, 400, 'invalid_request', 'missing code');
+
+    let exchanged: GoogleExchangeResult;
+    try {
+      exchanged = deps.exchangeCode ? await deps.exchangeCode(code, st.flow) : { tokens: {} };
+    } catch (e) {
+      // The detail can name proxies and hosts; it goes to the log, not the browser.
+      const detail = e instanceof Error ? e.message : typeof e === 'string' ? e : 'non-Error rejection';
+      log(`callback exchange failed flow=${st.flow}: ${logSafe(detail, 300)}`);
+      return errorPage(res, 400, 'invalid_grant', 'Google could not complete the sign-in; start again from your app');
+    }
+
+    if (st.flow === 'alias_add') {
+      if (!st.alias || !st.tenantId) return errorPage(res, 400, 'invalid_request', 'alias_add without an alias/tenant binding');
+      if (!deps.bindTenantAlias) return errorPage(res, 500, 'E_ALIAS_ADD_UNAVAILABLE', 'account linking is not enabled on this server');
+      const boundEmail = (exchanged.email ?? '').toLowerCase();
+      if (!boundEmail) return errorPage(res, 403, 'access_denied', 'Google did not return an email for the signed-in account');
+      let refusal: AliasBindRefusal['refused'] | undefined;
+      try {
+        const out = await deps.bindTenantAlias({ tenantId: st.tenantId, alias: st.alias, email: boundEmail, bundles: st.bundles, nonce: st.nonce, tokens: exchanged.tokens, sub: exchanged.sub });
+        refusal = (out as AliasBindRefusal | undefined)?.refused;
+      } catch (e) {
+        // Any rejection reason, even none, must still reach this answer.
+        log(`alias_add bind failed for "${logSafe(st.alias, 64)}": ${logSafe(e instanceof Error ? e.message : typeof e === 'string' ? e : 'non-Error rejection', 200)}`);
+        return errorPage(res, 500, 'E_ALIAS_ADD_FAILED', 'the account could not be saved; try the link again or ask for a fresh one');
+      }
+      if (refusal) {
+        // The slug lands in a text/plain body; keep it a bare identifier.
+        const slug = typeof refusal.slug === 'string' && /^[A-Za-z0-9_]+$/.test(refusal.slug) ? refusal.slug : 'access_denied';
+        const message = typeof refusal.message === 'string' && refusal.message ? refusal.message : 'the account could not be linked';
+        log(`alias_add refused for "${logSafe(st.alias, 64)}": ${logSafe(slug, 64)}`);
+        return errorPage(res, 403, slug, message);
+      }
+      log(`callback ok flow=alias_add alias=${logSafe(st.alias, 64)}`);
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`<!doctype html><meta charset=utf-8><p>Linked "${escapeHtml(st.alias)}" to this server. Start a new chat to use it.</p>`);
+      return true;
+    }
+
+    if (st.flow === 'alias_reauth') {
+      if (!st.alias) return errorPage(res, 400, 'invalid_request', 'alias_reauth without an alias');
+      // Identity binding: only overwrite the alias's tokens if the completing
+      // Google identity matches the alias's configured account (else account swap).
+      const gotEmail = (exchanged.email ?? '').toLowerCase();
+      const expected = (deps.aliasEmail?.(st.alias) ?? '').toLowerCase();
+      if (!expected || !gotEmail || gotEmail !== expected) {
+        log(`alias_reauth identity mismatch for "${logSafe(st.alias, 64)}" (got ${logSafe(gotEmail || 'none', 254)})`);
+        return errorPage(res, 403, 'access_denied', 'the Google account you signed in with is not the one configured for this alias');
+      }
+      // A completion without a refresh token would replace a working credential
+      // with one that dies within the hour; keep the stored token instead.
+      const refreshToken = exchanged.tokens.refresh_token;
+      if (typeof refreshToken !== 'string' || refreshToken === '') {
+        log(`alias_reauth for "${logSafe(st.alias, 64)}" returned no refresh token; stored token kept`);
+        return errorPage(res, 400, 'E_REAUTH_INCOMPLETE', 'Google did not return a long-lived token, so the stored one was kept. Open the re-auth link again and approve access.');
+      }
+      const granted = typeof exchanged.tokens.scope === 'string' ? exchanged.tokens.scope : undefined;
+      const missing = deps.missingScopes?.(st.alias, granted) ?? [];
+      const listed = missing.map((m) => `<code>${escapeHtml(m)}</code>`).join(', ');
+      // A narrower grant replaces nothing that works: the link is reusable for
+      // an hour and the scope isn't signed, so it may not be the holder's choice.
+      if (missing.length > 0 && deps.hasToken?.(st.alias)) {
+        log(`alias_reauth for "${logSafe(st.alias, 64)}" granted ${missing.length} fewer scope(s); stored token kept`);
+        res.writeHead(400, { 'Content-Type': 'text/html' });
+        res.end(`<!doctype html><meta charset=utf-8><p>E_SCOPE_NOT_GRANTED: Google did not grant ${missing.length} requested scope(s): ${listed}, so the stored access for "${escapeHtml(st.alias)}" was kept. Ask for a fresh re-auth link and leave every box ticked.</p>`);
+        return true;
+      }
+      deps.writeToken?.(st.alias, exchanged.tokens);
+      log(`callback ok flow=alias_reauth alias=${logSafe(st.alias, 64)}`);
+      // With no stored token a partial grant still beats none; say what is missing.
+      const gap = missing.length
+        ? `<p>Google did not grant ${missing.length} requested scope(s): ${listed}. Ask for a fresh re-auth link and leave every box ticked to restore them.</p>`
+        : '';
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`<!doctype html><meta charset=utf-8><p>Re-authenticated "${escapeHtml(st.alias)}". You can close this window.</p>${gap}`);
+      return true;
+    }
+
+    // owner_gate: resolve the verified email to its subject (default: owner
+    // allowlist -> 'owner'), discard Google tokens; the sub signs into the authz code.
+    const email = (exchanged.email ?? '').toLowerCase();
+    const iss = encodeURIComponent(base);
+    const resolved = email ? resolveSubject(email, { sub: exchanged.sub, hd: exchanged.hd }) : null;
+    if (!resolved || 'denied' in resolved) {
+      const sep = st.redirect_uri.includes('?') ? '&' : '?';
+      const s = st.client_state ? `&state=${encodeURIComponent(st.client_state)}` : '';
+      const desc = resolved && 'denied' in resolved ? resolved.denied.description : undefined;
+      const d = desc !== undefined && ERROR_DESCRIPTION_RE.test(desc) ? `&error_description=${encodeURIComponent(desc)}` : '';
+      return redirect(res, `${st.redirect_uri}${sep}error=access_denied${d}${s}&iss=${iss}`);
+    }
+    const subject = resolved;
+    const authzCode = await signAuthzCode(
+      { redirect_uri: st.redirect_uri, code_challenge: st.code_challenge, resource: st.resource, sub: subject.sub },
+      base,
+      flowSecret,
+      nowSec(),
+    );
+    log('callback ok flow=owner_gate');
+    const sep = st.redirect_uri.includes('?') ? '&' : '?';
+    const s = st.client_state ? `&state=${encodeURIComponent(st.client_state)}` : '';
+    return redirect(res, `${st.redirect_uri}${sep}code=${encodeURIComponent(authzCode)}${s}&iss=${iss}`);
+  };
+
+  const token: RouteHandler = async (req, res) => {
+    let form: Record<string, string>;
+    try {
+      form = parseForm(await readBody(req), req.headers['content-type']);
+    } catch {
+      return json(res, 400, { error: 'invalid_request', message: 'bad body' });
+    }
+    const grant = form.grant_type;
+    if (grant === 'authorization_code') {
+      let code: Awaited<ReturnType<typeof verifyAuthzCode>>;
+      try {
+        code = await verifyAuthzCode(form.code ?? '', base, flowSecret, nowSec());
+      } catch {
+        return json(res, 400, { error: 'invalid_grant', message: 'authorization code invalid or expired' });
+      }
+      const spent = spend(code, CODE_TTL_DEFAULT);
+      if (spent === 'full') return subjectUnavailable(res);
+      if (spent === 'replay') return json(res, 400, { error: 'invalid_grant', message: 'authorization code already redeemed' });
+      if (form.redirect_uri !== code.redirect_uri) {
+        return json(res, 400, { error: 'invalid_grant', message: 'redirect_uri mismatch' });
+      }
+      if (form.resource && form.resource !== code.resource) {
+        return json(res, 400, { error: 'invalid_grant', message: 'resource mismatch' });
+      }
+      if (!form.code_verifier || pkceS256(form.code_verifier) !== code.code_challenge) {
+        return json(res, 400, { error: 'invalid_grant', message: 'PKCE verification failed' });
+      }
+      const access = await signAccessToken({ base, secret, iat: nowSec(), ttlSec: accessTtl, sub: code.sub });
+      if (deps.subjectActive) {
+        let active: boolean;
+        try {
+          active = deps.subjectActive(code.sub);
+        } catch (e) {
+          log(`token deferred grant=authorization_code: subject check failed: ${e instanceof Error ? logSafe(e.message, 200) : 'non-Error throw'}`);
+          // Nothing was issued and PKCE passed, so the retry the 503 asks for may redeem it.
+          replay.unspend(code.jti);
+          return subjectUnavailable(res);
+        }
+        if (!active) {
+          log('token refused grant=authorization_code: subject inactive');
+          return json(res, 400, { error: 'invalid_grant', message: 'the subject is no longer provisioned' });
+        }
+      }
+      const refreshToken = refresh.issue(now(), code.sub, fingerprintOf(req, form.client_id ?? ''));
+      log('token issued grant=authorization_code');
+      return json(res, 200, { access_token: access, token_type: 'Bearer', expires_in: accessTtl, refresh_token: refreshToken, scope: 'mcp:use' });
+    }
+    if (grant === 'refresh_token') {
+      const subjectActive = deps.subjectActive;
+      const accept = subjectActive
+        ? (sub: string): boolean => {
+            let active: boolean;
+            try {
+              active = subjectActive(sub);
+            } catch (e) {
+              throw new SubjectCheckUnavailable('subject check failed', { cause: e });
+            }
+            if (!active) log('token refused grant=refresh_token: subject inactive');
+            return active;
+          }
+        : undefined;
+      let next: ReturnType<RefreshStore['rotate']>;
+      try {
+        next = refresh.rotate(form.refresh_token ?? '', now(), accept, fingerprintOf(req, form.client_id ?? ''));
+      } catch (e) {
+        if (!(e instanceof SubjectCheckUnavailable)) throw e;
+        log(`token deferred grant=refresh_token: subject check failed: ${e.cause instanceof Error ? logSafe(e.cause.message, 200) : 'non-Error throw'}`);
+        return subjectUnavailable(res);
+      }
+      if (!next) return json(res, 400, { error: 'invalid_grant', message: 'unknown or rotated refresh token' });
+      const access = await signAccessToken({ base, secret, iat: nowSec(), ttlSec: accessTtl, sub: next.sub });
+      log('token issued grant=refresh_token');
+      return json(res, 200, { access_token: access, token_type: 'Bearer', expires_in: accessTtl, refresh_token: next.token, scope: 'mcp:use' });
+    }
+    return json(res, 400, { error: 'unsupported_grant_type', message: 'authorization_code or refresh_token only' });
+  };
+
+  // Parse the raw JSON body directly; the redirect_uris array must survive intact.
+  const register: RouteHandler = async (req, res) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readBody(req));
+    } catch {
+      return json(res, 400, { error: 'invalid_client_metadata', message: 'a JSON body with redirect_uris is required' });
+    }
+    // Shape first: a throw here is an unauthenticated 500 per request, and a
+    // `null` body has no properties while String() throws on {"toString":1}.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return json(res, 400, { error: 'invalid_client_metadata', message: 'a JSON body with redirect_uris is required' });
+    }
+    const raw = (parsed as { redirect_uris?: unknown }).redirect_uris;
+    const redirectUris = Array.isArray(raw) ? raw : [];
+    if (redirectUris.length === 0) return json(res, 400, { error: 'invalid_client_metadata', message: 'redirect_uris required' });
+    if (!redirectUris.every((u): u is string => typeof u === 'string')) {
+      return json(res, 400, { error: 'invalid_client_metadata', message: 'every redirect_uri must be a string' });
+    }
+    if (redirectUris.length > DCR_MAX_REDIRECT_URIS || redirectUris.some((u) => u.length > DCR_MAX_URI_LEN)) {
+      return json(res, 400, { error: 'invalid_client_metadata', message: 'too many or oversized redirect_uris' });
+    }
+    // Bound the store: FIFO-evict the oldest registration once at capacity (Map
+    // preserves insertion order) so a /register flood can't grow RSS unbounded.
+    while (registered.size >= DCR_MAX_CLIENTS) {
+      const oldest = registered.keys().next().value;
+      if (oldest === undefined) break;
+      registered.delete(oldest);
+    }
+    const clientId = `mcpb-${randomBytes(16).toString('hex')}`;
+    registered.set(clientId, { redirect_uris: redirectUris });
+    return json(res, 201, { client_id: clientId, redirect_uris: redirectUris, token_endpoint_auth_method: 'none' });
+  };
+
+  const wellKnownPrm: RouteHandler = (req, res) => json(res, 200, prm);
+  const wellKnownAs: RouteHandler = (req, res) => json(res, 200, asMetadata);
+
+  const routes: Record<string, RouteHandler> = {
+    '/.well-known/oauth-protected-resource': wellKnownPrm,
+    '/.well-known/oauth-protected-resource/mcp': wellKnownPrm,
+    '/.well-known/oauth-authorization-server': wellKnownAs,
+    '/authorize': authorize,
+    '/callback': callback,
+    '/token': token,
+    '/register': register,
+  };
+
+  const wwwAuth = `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource", scope="mcp:use"`;
+  const authenticate = async (req: IncomingMessage): Promise<AuthOutcome> => {
+    const header = req.headers.authorization;
+    if (!header || !header.startsWith('Bearer ')) {
+      return { ok: false, status: 401, headers: { 'WWW-Authenticate': wwwAuth }, body: JSON.stringify({ error: 'E_MCP_TOKEN_INVALID', message: 'missing bearer token' }) };
+    }
+    try {
+      const claims = await verifyAccessToken(header.slice(7), base, secret);
+      return { ok: true, sub: claims.sub };
+    } catch {
+      return { ok: false, status: 401, headers: { 'WWW-Authenticate': wwwAuth }, body: JSON.stringify({ error: 'E_MCP_TOKEN_INVALID', message: 'invalid or expired token' }) };
+    }
+  };
+
+  const mintFlowState: AuthServer['mintFlowState'] = async ({ flow, alias, tenantId, bundles, nonce }) => {
+    // /authorize has a signed branch for alias_add only; anything else minted
+    // here would be a state no route verifies the way its flow needs.
+    if (flow !== 'alias_add') throw new Error(`mintFlowState supports alias_add only, not ${String(flow)}`);
+    const state = await signState(
+      { flow, client_id: '', redirect_uri: '', code_challenge: '', resource, alias, tenantId, bundles, nonce },
+      base,
+      flowSecret,
+      nowSec(),
+    );
+    return `${base}/authorize?flow=${flow}&state=${encodeURIComponent(state)}`;
+  };
+
+  const reauthLink: AuthServer['reauthLink'] = (alias) => `${base}/authorize?flow=alias_reauth&${signReauthLink(base, secret, alias, nowSec())}`;
+
+  return { routes, authenticate, mintFlowState, reauthLink };
+}

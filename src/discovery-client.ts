@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-export const WORKSPACE_APIS: Record<string, { id: string; version: string }> = {
+export const SUPPORTED_APIS: Record<string, { id: string; version: string }> = {
   gmail: { id: 'gmail', version: 'v1' },
   drive: { id: 'drive', version: 'v3' },
   calendar: { id: 'calendar', version: 'v3' },
@@ -21,6 +21,8 @@ export const WORKSPACE_APIS: Record<string, { id: string; version: string }> = {
   admin_reports: { id: 'admin', version: 'reports_v1' },
   admin_datatransfer: { id: 'admin', version: 'datatransfer_v1' },
   groupssettings: { id: 'groupssettings', version: 'v1' },
+  analyticsadmin: { id: 'analyticsadmin', version: 'v1beta' },
+  analyticsdata: { id: 'analyticsdata', version: 'v1beta' },
   appsmarket: { id: 'appsmarket', version: 'v2' },
   classroom: { id: 'classroom', version: 'v1' },
   cloudidentity: { id: 'cloudidentity', version: 'v1' },
@@ -34,6 +36,36 @@ export const WORKSPACE_APIS: Record<string, { id: string; version: string }> = {
   vault: { id: 'vault', version: 'v1' },
   workspaceevents: { id: 'workspaceevents', version: 'v1' },
 };
+
+// Names agents actually type for an API, mapped to real SUPPORTED_APIS keys;
+// plural-target entries only where the split ("analytics" is two APIs) is real.
+export const API_ALIASES: Record<string, string[]> = {
+  analytics: ['analyticsadmin', 'analyticsdata'],
+  ga4: ['analyticsadmin', 'analyticsdata'],
+  googleanalytics: ['analyticsadmin', 'analyticsdata'],
+  admin: ['admin_directory', 'admin_reports', 'admin_datatransfer'],
+  adminsdk: ['admin_directory', 'admin_reports', 'admin_datatransfer'],
+  directory: ['admin_directory'],
+  webmasters: ['searchconsole'],
+  gsc: ['searchconsole'],
+  contacts: ['people'],
+  appsscript: ['script'],
+  appscript: ['script'],
+  gmailpostmastertools: ['postmaster'],
+};
+
+/**
+ * Resolve an `api` argument to real SUPPORTED_APIS keys: exact match, then
+ * case/punctuation-normalized ("Search-Console" -> searchconsole), then the
+ * alias map. null = genuinely unknown.
+ */
+export function resolveApiAliases(api: string): string[] | null {
+  if (SUPPORTED_APIS[api]) return [api];
+  const norm = api.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  const direct = Object.keys(SUPPORTED_APIS).find((k) => k.replace(/[^a-z0-9]/g, '') === norm);
+  if (direct) return [direct];
+  return API_ALIASES[norm] ?? null;
+}
 
 export interface DiscoveryParam {
   location: 'path' | 'query';
@@ -79,6 +111,18 @@ export function discoveryCacheDir(env: NodeJS.ProcessEnv = process.env): string 
   );
 }
 
+// Default cache path only (an operator's DISCOVERY_CACHE_PATH may be shared
+// and keeps its mode), only when this process owns it; clears group/other bits.
+function tightenOwnDir(dir: string): void {
+  if (process.platform === 'win32') return;
+  try {
+    const st = fs.statSync(dir);
+    if (st.uid === process.getuid?.() && (st.mode & 0o077) !== 0) fs.chmodSync(dir, st.mode & ~0o077 & 0o7777);
+  } catch {
+    // the cache still works with the directory's own mode
+  }
+}
+
 // A poisoned cache file could repoint baseUrl off-Google; refuse to send the
 // user's Bearer token anywhere but a googleapis.com host.
 export function isGoogleApiUrl(url: string): boolean {
@@ -104,10 +148,18 @@ export function buildMethodIndex(doc: DiscoveryDoc, api: string): DiscoveryMetho
         flatPath?: string;
         description?: string;
         parameters?: Record<string, DiscoveryParam>;
+        parameterOrder?: string[];
         scopes?: string[];
       };
       if (!method.id || !method.httpMethod || !method.path) continue;
       const params = method.parameters ?? {};
+      // parameters{} has unstable key order between fetches; sort by the
+      // canonical parameterOrder (alphabetical tie-break) for deterministic output.
+      const order = method.parameterOrder ?? [];
+      const pos = (n: string) => {
+        const i = order.indexOf(n);
+        return i === -1 ? order.length : i;
+      };
       out.push({
         id: method.id,
         api,
@@ -118,7 +170,8 @@ export function buildMethodIndex(doc: DiscoveryDoc, api: string): DiscoveryMetho
         params,
         requiredParams: Object.entries(params)
           .filter(([, p]) => p.required)
-          .map(([name]) => name),
+          .map(([name]) => name)
+          .sort((a, b) => pos(a) - pos(b) || a.localeCompare(b)),
         scopes: method.scopes ?? [],
       });
     }
@@ -135,11 +188,12 @@ export async function loadMethodIndex(api: string, deps: DiscoveryDeps = {}): Pr
   const cached = memoryCache.get(api);
   if (cached && now() < cached.refreshAfter) return cached.index;
 
-  const spec = WORKSPACE_APIS[api];
+  const spec = SUPPORTED_APIS[api];
   if (!spec) {
-    throw new Error(`Unknown api "${api}". Known: ${Object.keys(WORKSPACE_APIS).join(', ')}`);
+    throw new Error(`Unknown api "${api}". Known: ${Object.keys(SUPPORTED_APIS).join(', ')}`);
   }
   const fetchFn = deps.fetchFn ?? ((url: string) => fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }));
+  const defaultDir = deps.cacheDir === undefined && process.env.DISCOVERY_CACHE_PATH === undefined;
   const cacheDir = deps.cacheDir ?? discoveryCacheDir();
   const cacheFile = path.join(cacheDir, `${api}.json`);
 
@@ -162,20 +216,34 @@ export async function loadMethodIndex(api: string, deps: DiscoveryDeps = {}): Pr
   let staleFallback = false;
   if (cacheFresh()) doc = readCache();
   if (!doc) {
-    const url = `https://www.googleapis.com/discovery/v1/apis/${spec.id}/${spec.version}/rest`;
-    try {
-      const res = await fetchFn(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      doc = (await res.json()) as DiscoveryDoc;
-      fs.mkdirSync(cacheDir, { recursive: true });
-      fs.writeFileSync(cacheFile, JSON.stringify(doc), { mode: 0o600 });
-    } catch (err) {
+    // Newer APIs are absent from the central discovery directory (404); try
+    // each service's own $discovery endpoint too, as scripts/fetch-discovery does.
+    const urls = [
+      `https://www.googleapis.com/discovery/v1/apis/${spec.id}/${spec.version}/rest`,
+      `https://${spec.id}.googleapis.com/$discovery/rest?version=${spec.version}`,
+    ];
+    let fetchError: Error | undefined;
+    for (const url of urls) {
+      try {
+        const res = await fetchFn(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        doc = (await res.json()) as DiscoveryDoc;
+        fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+        if (defaultDir) tightenOwnDir(cacheDir);
+        fs.writeFileSync(cacheFile, JSON.stringify(doc), { mode: 0o600 });
+        break;
+      } catch (err) {
+        fetchError = err as Error;
+        doc = undefined;
+      }
+    }
+    if (!doc) {
       doc = readCache();
       staleFallback = true;
       if (!doc) {
         throw new Error(
-          `Could not fetch the Google API Discovery document for "${api}" and no local cache exists (${(err as Error).message}). Retry when online.`,
-          { cause: err },
+          `Could not fetch the Google API Discovery document for "${api}" and no local cache exists (${fetchError?.message ?? 'fetch failed'}). Retry when online.`,
+          { cause: fetchError },
         );
       }
     }
@@ -189,9 +257,15 @@ export function clearDiscoveryMemoryCache(): void {
   memoryCache.clear();
 }
 
-const POST_READ_VERB = /^(get|list|search|query|lookup|count|batchGet|generateIds|export|download|inspect)/i;
-const POST_UPDATE_VERB = /^(untrash|undelete|restore|modify|move|set|sort|merge|unmerge|replace|resize|publish|resolve|update|patch|write|format)/i;
-const POST_DELETE_VERB = /^(batch)?(delete|remove|trash|clear|empty|obliterate|purge|revoke|wipeout)/i;
+// GA4-style report execution (runReport, batchRunPivotReports, runAccessReport)
+// and check* predicates are POSTs purely for the request-body size — reads.
+const POST_READ_VERB = /^(get|list|search|query|lookup|count|batchGet|generateIds|export|download|inspect|check|suggest|(batch)?run\w*report)/i;
+// Update, tested before delete, so cancelWipe (calling off a wipe) doesn't
+// reach the delete list via its "cancel" suffix. See docs/internals.md.
+const POST_UPDATE_VERB = /^(cancelWipe|(batch)?(untrash|undelete|restore|modify|move|set|sort|merge|unmerge|replace|resize|publish|resolve|update|patch|write|format|change|close|reopen|enable|disable|hide|unhide|accept|approve|decline|reassign|reactivate|renew|mark|turn|suspend|activate|make|return|reclaim|complete))/i;
+// archive/wipe/reset/stop/cancel/end etc. all remove or permanently discard
+// something that existed, so the most restrictive class is the safe one. See docs/internals.md.
+const POST_DELETE_VERB = /^(batch)?(delete|remove|trash|clear|empty|obliterate|purge|revoke|wipeout|archive|wipe|invalidate|signOut|stop|cancel|unregister|unreserve|reset|end)/i;
 
 export function cudFromMethod(method: Pick<DiscoveryMethod, 'httpMethod' | 'id'>): 'read' | 'create' | 'update' | 'delete' {
   switch (method.httpMethod) {
@@ -221,12 +295,33 @@ export function expandPath(template: string, pathParams: Record<string, string>)
     if (value === undefined) {
       throw new Error(`Missing required path parameter "${name}"`);
     }
-    return plus ? String(value).split('/').map(encodeURIComponent).join('/') : encodeURIComponent(String(value));
+    // Both a blank segment and a "." / ".." segment silently retarget the
+    // request to a different, successfully-answered endpoint. See docs/internals.md.
+    const segments = plus ? String(value).split('/') : [String(value)];
+    for (const segment of segments) {
+      if (segment.trim() === '') {
+        throw new Error(
+          `Path parameter "${name}" is empty. An empty value addresses the collection, not one resource, so nothing was sent to Google.`,
+        );
+      }
+      if (segment === '.' || segment === '..') {
+        throw new Error(
+          `Path parameter "${name}" contains a "${segment}" path segment, which would retarget the request at a different endpoint. Nothing was sent to Google.`,
+        );
+      }
+    }
+    return segments.map(encodeURIComponent).join('/');
   });
 }
 
+/** Search keywords are a few words; the caps keep a caller-sized query from
+ * driving index-size x token-count substring scans on the event loop. */
+export const MAX_SEARCH_QUERY = 500;
+const MAX_SEARCH_TOKENS = 16;
+
 export function searchMethods(index: DiscoveryMethod[], query: string, limit = 10): DiscoveryMethod[] {
-  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const words = query.slice(0, MAX_SEARCH_QUERY).toLowerCase().split(/\s+/).filter(Boolean);
+  const tokens = [...new Set(words)].slice(0, MAX_SEARCH_TOKENS);
   if (tokens.length === 0) return index.slice(0, limit);
   const scored = index
     .map((m) => {

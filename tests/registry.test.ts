@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { z } from 'zod';
-import { inferCud, ToolRegistry } from '../src/registry.js';
+import { inferCud, ToolRegistry, firstSentence } from '../src/registry.js';
+import { setHintProvider } from '../src/hint-provider.js';
 import type { Policy } from '../src/write-control.js';
 
 describe('inferCud', () => {
@@ -53,6 +54,41 @@ describe('inferCud', () => {
   });
 });
 
+describe('firstSentence', () => {
+  const cases: [string, string][] = [
+    // Simple single sentence - unchanged
+    ['One.', 'One.'],
+    // Two sentences - cuts at first period-space
+    ['One. Two.', 'One.'],
+    // E.g. abbreviation - does not cut
+    ['Get a record by name (e.g. conferenceRecords/abc). More text.', 'Get a record by name (e.g. conferenceRecords/abc).'],
+    // I.e. abbreviation - does not cut
+    ['Item (i.e. the first one). More text.', 'Item (i.e. the first one).'],
+    // Etc. abbreviation - does not cut
+    ['Multiple formats (etc.). More text.', 'Multiple formats (etc.).'],
+    // Vs. abbreviation - does not cut
+    ['Compare A vs. B. More text.', 'Compare A vs. B.'],
+    // Case insensitive - E.G. vs e.g.
+    ['Test (E.G. example). More.', 'Test (E.G. example).'],
+    // Period inside parenthesis - does not cut
+    ['Get a value (min. 1). More text.', 'Get a value (min. 1).'],
+    // No valid cut - returns whole text
+    ['Just one sentence without period.', 'Just one sentence without period.'],
+    // No period at all
+    ['No period here', 'No period here'],
+    // Multiple periods inside parens
+    ['Foo (bar. baz. qux). Next.', 'Foo (bar. baz. qux).'],
+    // Nested parens
+    ['Example (see (nested. case)). Next.', 'Example (see (nested. case)).'],
+    // Mixed abbreviations
+    ['Get item (e.g. foo). Get it (i.e. now). Done.', 'Get item (e.g. foo).'],
+  ];
+
+  it.each(cases)('%s → %s', (input, expected) => {
+    expect(firstSentence(input)).toBe(expected);
+  });
+});
+
 const FULL_WRITES: Policy = { profile: 'full-writes', readOnly: false, allow: [], deny: [] };
 
 function fakeServer() {
@@ -74,6 +110,8 @@ function fakeServer() {
 }
 
 describe('ToolRegistry', () => {
+  afterEach(() => setHintProvider(null));
+
   it('records the tool entry and forwards to the server', () => {
     const { server, registered } = fakeServer();
     const reg = new ToolRegistry(server as never, FULL_WRITES);
@@ -91,13 +129,15 @@ describe('ToolRegistry', () => {
     const reg = new ToolRegistry(server as never, FULL_WRITES);
     reg.registerTool('gmail_search', { description: 'x' }, () => {});
     reg.registerTool('gmail_create_draft', { description: 'x' }, () => {});
+    reg.registerTool('gmail_send', { description: 'x' }, () => {});
     reg.registerTool('gmail_modify_labels', { description: 'x' }, () => {});
     reg.registerTool('gmail_delete', { description: 'x' }, () => {});
-    const expected: Record<string, { readOnlyHint: boolean; destructiveHint: boolean }> = {
-      gmail_search: { readOnlyHint: true, destructiveHint: false },
-      gmail_create_draft: { readOnlyHint: false, destructiveHint: false },
-      gmail_modify_labels: { readOnlyHint: false, destructiveHint: true },
-      gmail_delete: { readOnlyHint: false, destructiveHint: true },
+    const expected: Record<string, { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean }> = {
+      gmail_search: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+      gmail_create_draft: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+      gmail_send: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+      gmail_modify_labels: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+      gmail_delete: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     };
     for (const r of registered) {
       expect(r.config.annotations, r.name).toMatchObject(expected[r.name]);
@@ -108,6 +148,36 @@ describe('ToolRegistry', () => {
     for (const t of listed) {
       expect(t.annotations, t.name).toMatchObject(expected[t.name]);
     }
+  });
+
+  it('advertises every generated non-read tool as destructive, whatever its HTTP-derived cud', () => {
+    const { server } = fakeServer();
+    const reg = new ToolRegistry(server as never, FULL_WRITES);
+    for (const cud of ['read', 'create', 'update', 'delete'] as const) {
+      reg.registerTool(`drive_gen_${cud}`, { description: 'x', cud }, () => {});
+    }
+    const hints = Object.fromEntries(reg.tools.map((t) => [t.cud, [t.annotations.readOnlyHint, t.annotations.destructiveHint]]));
+    expect(hints).toEqual({ read: [true, false], create: [false, true], update: [false, true], delete: [false, true] });
+  });
+
+  it('advertises read-classified tools that write as writes, keeping their gating and fan-out class', () => {
+    const { server } = fakeServer();
+    const reg = new ToolRegistry(server as never, FULL_WRITES);
+    const writers = ['account_add', 'account_reauth', 'account_write_config', 'gmail_download_attachment', 'drive_download', 'drive_export'];
+    for (const name of writers) reg.registerTool(name, { description: 'x' }, () => {});
+    for (const t of reg.tools) {
+      expect(t.cud, t.name).toBe('read');
+      expect(t.annotations, t.name).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    }
+  });
+
+  it('keeps the requiresUserInteraction client meta on the irreversible set only', () => {
+    const { server } = fakeServer();
+    const reg = new ToolRegistry(server as never, FULL_WRITES);
+    reg.registerTool('gmail_send', { description: 'x' }, () => {});
+    reg.registerTool('gmail_create_draft', { description: 'x' }, () => {});
+    const meta = Object.fromEntries(reg.tools.map((t) => [t.name, t.clientMeta?.['anthropic/requiresUserInteraction']]));
+    expect(meta).toEqual({ gmail_send: true, gmail_create_draft: undefined });
   });
 
   it('explicit annotation overrides survive through to the list handler', async () => {
@@ -154,7 +224,33 @@ describe('ToolRegistry', () => {
       { tool: 'drive_search', summary: 'Search files', args: ['account'], cud: 'read' },
     ]);
     expect(reg.catalog('drive', 'upload').map((o) => o.tool)).toEqual(['drive_upload']);
-    expect(reg.catalog('drive', 'nothing-matches')).toEqual([]);
+    // No token matches anything: fall back to the full listing rather than an empty result.
+    expect(reg.catalog('drive', 'nothing-matches')).toEqual([
+      { tool: 'drive_upload', summary: 'Upload a file to Drive', args: ['account', 'path'], cud: 'create' },
+      { tool: 'drive_search', summary: 'Search files', args: ['account'], cud: 'read' },
+    ]);
+  });
+
+  it('tokenizes a multi-word query, OR-matches tokens, and ranks by matched token count', () => {
+    const { server } = fakeServer();
+    const reg = new ToolRegistry(server as never, FULL_WRITES);
+    reg.registerTool('drive_upload', { description: 'Upload a file to Drive', inputSchema: { account: z.string() } }, () => {});
+    reg.registerTool('drive_search', { description: 'Search files', inputSchema: { account: z.string() } }, () => {});
+    // "file" hits both (upload's description, search's "files"); "upload" only hits drive_upload.
+    expect(reg.catalog('drive', 'file upload').map((o) => o.tool)).toEqual(['drive_upload', 'drive_search']);
+  });
+
+  it('a no-match fallback lists every op with a one-line summary, not the full description', () => {
+    const { server } = fakeServer();
+    const reg = new ToolRegistry(server as never, FULL_WRITES);
+    reg.registerTool(
+      'drive_export',
+      { description: 'Export a file to another format. Supports Docs, Sheets and Slides.', inputSchema: { account: z.string() } },
+      () => {},
+    );
+    const result = reg.catalog('drive', 'zzz-nope');
+    expect(result.map((o) => o.tool)).toEqual(['drive_export']);
+    expect(result[0].summary).toBe('Export a file to another format.');
   });
 
   it('reveal notifies once per service and flips visibility', () => {
@@ -192,7 +288,7 @@ describe('ToolRegistry', () => {
     expect(search.inputSchema.type).toBe('object');
     expect(Object.keys(search.inputSchema.properties)).toEqual(['account']);
     expect(search.inputSchema.required).toEqual(['account']);
-    expect(search.annotations).toEqual({ readOnlyHint: true, destructiveHint: false });
+    expect(search.annotations).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: true });
 
     const schemaOf = (r: { tools: unknown[] }, name: string) =>
       (r.tools.find((t) => (t as { name: string }).name === name) as { inputSchema: unknown }).inputSchema;
@@ -240,7 +336,9 @@ describe('ToolRegistry', () => {
     const schemaOf = (n: string) => tools.find((t) => t.name === n)!.inputSchema.properties.account;
 
     expect(schemaOf('gmail_search').anyOf).toBeDefined();
-    expect((schemaOf('gmail_search').anyOf![0] as { enum: string[] }).enum).toEqual(['test', '*']);
+    // '*' is listed first so the enum tuple is statically non-empty (empty-safe
+    // for a fresh install); order is cosmetic, the accepted set is unchanged.
+    expect((schemaOf('gmail_search').anyOf![0] as { enum: string[] }).enum).toEqual(['*', 'test']);
     expect(schemaOf('gmail_send').enum).toEqual(['test']);
     expect(schemaOf('drive_download').enum).toEqual(['test']);
     expect(schemaOf('google_api_call').enum).toEqual(['test']);
@@ -276,8 +374,12 @@ describe('ToolRegistry', () => {
     expect(invalidBody.error).toBe('validation_error');
     expect(invalidBody.message).toContain('bogus');
 
+    // The CSV form always fans out now: the answer's shape must not depend on
+    // whether the caller happened to repeat an alias.
     const deduped = await handler({ account: 'test,test', query: 'q' });
-    expect(JSON.parse(deduped.content[0].text)).toEqual({ hit: 'q' });
+    const dedupedBody = JSON.parse(deduped.content[0].text);
+    expect(dedupedBody.results).toEqual([{ account: 'test', ok: true, data: { hit: 'q' } }]);
+    expect(dedupedBody.partial).toBe(false);
   });
 
   it('gates drive_transfer move as a delete while copy stays create-gated', async () => {
@@ -304,6 +406,26 @@ describe('ToolRegistry', () => {
     }
   });
 
+  it('a throwing hint provider never breaks a registry-wrapped write-denied call (red by mutation: drop the catch in hints())', async () => {
+    const policy: Policy = { profile: 'read-only', readOnly: true, allow: [], deny: [] };
+    const { server, registered } = fakeServer();
+    const reg = new ToolRegistry(server as never, policy);
+    reg.registerTool('gmail_send', { description: 'x', inputSchema: { to: z.string() } }, () => ({
+      content: [{ type: 'text' as const, text: '{}' }],
+    }));
+    setHintProvider({
+      render: () => {
+        throw new Error('provider blew up');
+      },
+    });
+    const handler = registered[0].handler as (...a: unknown[]) => Promise<{ content: { text: string }[] }>;
+    const out = await handler({ to: 'x' });
+    const body = JSON.parse(out.content[0].text);
+    expect(body.error).toBe('write_disabled');
+    expect(body.message).not.toContain('provider blew up');
+    expect(body.message).toContain('"gmail_send"');
+  });
+
   it('installListHandler throws when nothing is registered', () => {
     const { server } = fakeServer();
     const reg = new ToolRegistry(server as never, FULL_WRITES);
@@ -319,5 +441,24 @@ describe('ToolRegistry', () => {
     expect(reg.visibleCount()).toEqual({ eager: 1, revealed: 0, hidden: 2 });
     reg.reveal('drive');
     expect(reg.visibleCount()).toEqual({ eager: 1, revealed: 1, hidden: 1 });
+  });
+});
+
+describe('result-size budget default (_meta)', () => {
+  const FULL: Policy = { profile: 'full-writes', readOnly: false, allow: [], deny: [] };
+
+  it('injects the default cap, keeps declared ones, aligns generated tools with the executor cap', async () => {
+    const { server, getListHandler } = fakeServer();
+    const reg = new ToolRegistry(server as never, FULL);
+    reg.registerTool('gmail_search', { description: 'x' }, () => {});
+    reg.registerTool('gmail_read_thread', { description: 'x', _meta: { 'anthropic/maxResultSizeChars': 100_000 } }, () => {});
+    reg.registerTool('gmail_gen_probe', { description: 'x', cud: 'read' } as never, () => {});
+    reg.installListHandler();
+    reg.reveal('gmail');
+    const listed = (await getListHandler()!()).tools as { name: string; _meta?: Record<string, unknown> }[];
+    const byName = Object.fromEntries(listed.map((t) => [t.name, t._meta]));
+    expect(byName['gmail_search']?.['anthropic/maxResultSizeChars']).toBe(50_000);
+    expect(byName['gmail_read_thread']?.['anthropic/maxResultSizeChars']).toBe(100_000);
+    expect(byName['gmail_gen_probe']?.['anthropic/maxResultSizeChars']).toBe(100_000);
   });
 });

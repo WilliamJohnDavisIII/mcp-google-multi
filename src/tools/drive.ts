@@ -1,24 +1,29 @@
 import type { ToolRegistry } from '../registry.js';
 import { z } from 'zod';
-import { coerceArray, coerceBoolean } from './_coerce.js';
+import { coerceArray, coerceBoolean, coerceNumber } from './_coerce.js';
 import { drive as driveClient, type drive_v3 } from '@googleapis/drive';
-import { ACCOUNTS, ACCOUNT_CONFIG } from '../accounts.js';
+import { accountArgLive } from '../accounts.js';
 import type { Account } from '../accounts.js';
-import { getClient } from '../client.js';
-import { handleGoogleApiError } from './_errors.js';
+import { getClient, type CuratedToolDeps } from '../client.js';
+import { handleGoogleApiError, invalidParams, safeMessage, stringifyEnvelope } from './_errors.js';
+import { hostFilesRefused, openLocalReadStream, prepareLocalDest } from './_local-files.js';
+import { checkOutbound, outboundDeniedEnvelope, resolveOutboundAllowlist } from '../outbound-allowlist.js';
 import { isAllowed, writeDisabledResult } from '../write-control.js';
-import { capText } from '../trim.js';
+import { capText, listResult } from '../trim.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
 import mime from 'mime-types';
 
-const accountEnum = z.enum(ACCOUNTS);
+// drive_transfer's two-account form is the sanctioned schema exception and
+// stays REQUIRED: omission must fail at the schema, not as a runtime riddle.
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
 const FALLBACK_MAX_BYTES = 1024 * 1024 * 1024; // 1GB
+const MAX_UPLOAD_BASE64_BYTES = 10 * 1024 * 1024; // 10MB decoded
 
 const GOOGLE_WORKSPACE_TYPES = new Set([
   'application/vnd.google-apps.document',
@@ -26,6 +31,52 @@ const GOOGLE_WORKSPACE_TYPES = new Set([
   'application/vnd.google-apps.presentation',
   'application/vnd.google-apps.drawing',
 ]);
+
+// drive_read inlines only textual content; RFC 6839 +json/+xml/... suffixes and
+// a few bare application/* types count too (image/svg+xml was the motivating case).
+const TEXTUAL_EXACT = new Set([
+  'application/json',
+  'application/xml',
+  'application/javascript',
+  'application/x-ndjson',
+  'application/yaml',
+  'application/x-yaml',
+  'application/sql',
+  'application/x-sh',
+  'application/csv',
+]);
+export function isTextualMime(mimeType: string): boolean {
+  const bare = mimeType.split(';')[0].trim().toLowerCase();
+  if (bare.startsWith('text/')) return true;
+  if (/\+(json|xml|yaml|toml|csv)$/.test(bare)) return true;
+  return TEXTUAL_EXACT.has(bare);
+}
+
+const BINARY_READ_HINT =
+  'Binary content cannot be inlined. Use drive_download to save the file to disk, or drive_export for Google Workspace files.';
+
+// Accepted alongside the full application/vnd.google-apps.* ids so the obvious
+// short spelling ("document") works; the enum advertises both.
+const CONVERT_SHORTHANDS: Record<string, string> = {
+  document: 'application/vnd.google-apps.document',
+  spreadsheet: 'application/vnd.google-apps.spreadsheet',
+  presentation: 'application/vnd.google-apps.presentation',
+  drawing: 'application/vnd.google-apps.drawing',
+};
+export function resolveConvertTarget(convertTo: string | undefined): string | undefined {
+  if (!convertTo) return undefined;
+  return CONVERT_SHORTHANDS[convertTo] ?? convertTo;
+}
+const CONVERT_TO_VALUES = [
+  'document',
+  'spreadsheet',
+  'presentation',
+  'drawing',
+  'application/vnd.google-apps.document',
+  'application/vnd.google-apps.spreadsheet',
+  'application/vnd.google-apps.presentation',
+  'application/vnd.google-apps.drawing',
+] as const;
 
 // Comment/Reply fields list — Drive API requires explicit `fields` on every call.
 const COMMENT_BASE_FIELDS = 'id,kind,content,htmlContent,createdTime,modifiedTime,resolved,anchor,author,deleted,quotedFileContent';
@@ -35,11 +86,37 @@ const COMMENT_LIST_FIELDS = `nextPageToken,comments(${COMMENT_BASE_FIELDS},repli
 const REPLY_FIELDS = `kind,htmlContent,${REPLY_SUBFIELDS}`;
 const REPLY_LIST_FIELDS = `nextPageToken,replies(${REPLY_FIELDS})`;
 
-// path.basename() is a traversal guard — a caller-supplied filename must never escape savePath.
-export function prepareLocalDest(savePath: string, filename: string): string {
-  const dest = path.join(savePath, path.basename(filename));
-  fs.mkdirSync(savePath, { recursive: true });
-  return dest;
+export const DRIVE_QUERY_HINT =
+  "Drive search syntax: a plain keyword is treated as a full-text search, but a " +
+  "structured query needs an operator, e.g. \"name contains 'report'\", " +
+  "\"mimeType = 'application/pdf'\", or \"'me' in owners\". " +
+  'Reference: https://developers.google.com/drive/api/guides/search-files';
+
+// A bare keyword isn't valid Drive `q` syntax (400s "Invalid Value"), so wrap it
+// as a full-text match; a query with a comparison operator is passed through untouched.
+export function normalizeDriveQuery(raw: string): string {
+  const q = raw.trim();
+  if (q === '') return q;
+  // Structured iff it has a comparison operator or the membership form "<value> in
+  // (parents|owners|writers|readers)"; a bare apostrophe (e.g. O'Brien) doesn't count.
+  const hasComparison = /(\bcontains\b|!=|<=|>=|[=<>])/i.test(q);
+  const hasMembership = /\bin\s+(parents|owners|writers|readers)\b/i.test(q);
+  if (hasComparison || hasMembership) return q;
+  const escaped = q.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return `fullText contains '${escaped}'`;
+}
+
+// Drive 400s a malformed query with the opaque reason "invalid"/"Invalid Value";
+// detect it so drive_search returns query-syntax help instead of a generic upstream_error.
+export function isDriveInvalidQuery(error: any): boolean {
+  const raw = error?.code ?? error?.status ?? error?.response?.status;
+  const status = typeof raw === 'string' ? Number(raw) : raw;
+  if (status !== 400) return false;
+  const reason =
+    error?.errors?.[0]?.reason ??
+    error?.response?.data?.error?.errors?.[0]?.reason;
+  const message = error?.response?.data?.error?.message ?? error?.message ?? '';
+  return reason === 'invalid' || reason === 'invalidQuery' || /invalid value/i.test(String(message));
 }
 
 // sendNotificationEmail is only valid for user/group permissions, and Google forbids
@@ -55,30 +132,52 @@ export function resolveShareNotification(opts: {
   return opts.sendNotification ?? true;
 }
 
-export function registerDriveTools(server: ToolRegistry): void {
+export function registerDriveTools(server: ToolRegistry, deps: CuratedToolDeps = {}): void {
+  // Per-registry, live account enum + injectable client: the schema follows
+  // the registry's account view at parse time, not a process-global default.
+  const accountEnum = accountArgLive(() => server.accountAliases()).optional();
+  const requiredAccountEnum = accountArgLive(() => server.accountAliases());
+  const getClientFn = deps.getClientFn ?? getClient;
+  const localFiles = deps.localFiles ?? true;
+  const registerHostFileTool = localFiles ? server.registerTool : (() => undefined) as unknown as typeof server.registerTool;
   // ─── Read / search / list ──────────────────────────────────────────────
 
   server.registerTool(
     'drive_search',
     {
-      description: 'Search files in a Google Drive account',
+      description: 'Search files in a Google Drive account. A plain keyword is treated as a full-text search; pass Drive query syntax for a structured search.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        query: z.string().describe('Drive search syntax, e.g. "name contains \'MoU\'"'),
-        maxResults: z.number().min(1).max(100).default(20).optional()
-          .describe('Max results to return (default: 20)'),
+        query: z.string().describe('A plain keyword (full-text search) or Drive query syntax, e.g. "name contains \'MoU\'"'),
+        maxResults: coerceNumber(z.number().min(1).max(100)).optional()
+          .describe('Max results to return (default: 10, max: 100)'),
         driveId: z.string().optional().describe('Optional shared drive ID'),
+        pageToken: z.string().min(1).optional()
+          .describe('Continuation token from a previous call\'s nextPageToken'),
+        orderBy: z.string().optional()
+          .describe('Sort key(s) for files.list, e.g. "modifiedTime desc" or "folder,name". Default: Drive\'s relevance ranking for the query, an arbitrary stable order otherwise.'),
       },
     },
-    async ({ account, query, maxResults, driveId }) => {
+    async ({ account, query, maxResults, driveId, pageToken, orderBy }) => {
       try {
-        const auth = await getClient(account as Account);
+        // normalizeDriveQuery trims to '' and Drive reads that as "everything", so
+        // a blank query would list the whole drive as a "search" result.
+        if (query.trim() === '') {
+          return invalidParams(
+            account as Account,
+            '`query` is empty, and Drive reads an empty query as "match everything".',
+            'Pass a search term, or a structured Drive query such as "mimeType = \'application/pdf\'". To browse a folder instead, use drive_list.',
+          );
+        }
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
 
         const params: any = {
-          q: query,
-          pageSize: maxResults ?? 20,
-          fields: 'files(id,name,mimeType,modifiedTime,webViewLink,size,parents,driveId)',
+          q: normalizeDriveQuery(query),
+          pageSize: maxResults ?? 10,
+          // nextPageToken and incompleteSearch live OUTSIDE files(...): omit them from
+          // the mask and Drive drops them, making a partial result indistinguishable from a complete one.
+          fields: 'nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime,webViewLink,size,parents,driveId)',
           supportsAllDrives: true,
           includeItemsFromAllDrives: true,
         };
@@ -87,12 +186,36 @@ export function registerDriveTools(server: ToolRegistry): void {
           params.driveId = driveId;
           params.corpora = 'drive';
         }
+        if (pageToken) params.pageToken = pageToken;
+        if (orderBy) params.orderBy = orderBy;
 
         const res = await drive.files.list(params);
+        const incomplete = res.data.incompleteSearch === true;
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(res.data.files ?? [], null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(listResult('files', res.data.files ?? [], {
+            nextPageToken: res.data.nextPageToken,
+            capped: incomplete,
+            extra: incomplete ? { incompleteSearch: true } : undefined,
+            hint: incomplete
+              ? 'Drive could not search every corpus, so results are partial. Pass driveId to search one shared drive, or narrow the query.'
+              : undefined,
+          }), null, 2) }],
         };
       } catch (error: any) {
+        if (isDriveInvalidQuery(error)) {
+          // Goes through safeMessage/stringifyEnvelope like every other envelope
+          // so a non-JSON upstream response can't land here uncapped.
+          return {
+            content: [{ type: 'text' as const, text: stringifyEnvelope({
+              error: 'invalid_query',
+              message: safeMessage(error),
+              hint: DRIVE_QUERY_HINT,
+              retriable: false,
+              account: account as Account,
+            }) }],
+            isError: true as const,
+          };
+        }
         return handleDriveError(error, account as Account);
       }
     },
@@ -101,10 +224,11 @@ export function registerDriveTools(server: ToolRegistry): void {
   server.registerTool(
     'drive_read',
     {
-      description: 'Read the content of a Google Drive file (returns up to maxChars characters per call; non-Google-native files over 2MB return too_large)',
+      _meta: { 'anthropic/maxResultSizeChars': 100_000 },
+      description: 'Read the content of a Google Drive file: Workspace docs and textual types (text/*, JSON/XML/SVG and similar) inline; other binaries return error:binary (returns up to maxChars characters per call; non-Google-native files over 2MB return too_large)',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
         maxChars: z.number().min(1).max(2_000_000).default(100_000).optional()
           .describe('Max characters of content to return (default: 100000)'),
         offset: z.number().min(0).default(0).optional()
@@ -113,7 +237,7 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
     async ({ account, fileId, maxChars, offset }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
 
         const meta = await drive.files.get({
@@ -160,9 +284,14 @@ export function registerDriveTools(server: ToolRegistry): void {
                 name,
                 mimeType,
                 error: 'binary',
+                message: `"${name}" is ${mimeType}, which has no text to inline.`,
+                hint: BINARY_READ_HINT,
+                retriable: false,
+                account: account as string,
                 webViewLink,
               }, null, 2),
             }],
+            isError: true as const,
           };
         }
 
@@ -176,13 +305,18 @@ export function registerDriveTools(server: ToolRegistry): void {
                 name,
                 mimeType,
                 error: 'too_large',
+                message: `"${name}" is ${fileSize} bytes, over the ${MAX_FILE_SIZE}-byte inline limit for non-Google files.`,
+                hint: 'Use drive_download to save it to disk, or open webViewLink.',
+                retriable: false,
+                account: account as string,
                 webViewLink,
               }, null, 2),
             }],
+            isError: true as const,
           };
         }
 
-        if (mimeType?.startsWith('text/')) {
+        if (mimeType && isTextualMime(mimeType)) {
           const downloaded = await drive.files.get(
             { fileId, alt: 'media', supportsAllDrives: true },
             { responseType: 'text' },
@@ -198,9 +332,14 @@ export function registerDriveTools(server: ToolRegistry): void {
               name,
               mimeType,
               error: 'binary',
+              message: `"${name}" is ${mimeType}, which has no text to inline.`,
+              hint: BINARY_READ_HINT,
+              retriable: false,
+              account: account as string,
               webViewLink,
             }, null, 2),
           }],
+          isError: true as const,
         };
       } catch (error: any) {
         return handleDriveError(error, account as Account);
@@ -214,14 +353,16 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'List files in a Google Drive folder or root',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        folderId: z.string().optional().describe('Folder ID (omit for root)'),
+        folderId: z.string().optional().describe('Folder ID to list, omit for root. Named folderId here, not parentFolderId'),
         maxResults: z.number().min(1).max(100).default(50).optional()
           .describe('Max results to return (default: 50)'),
+        pageToken: z.string().min(1).optional()
+          .describe('Continuation token from a previous call\'s nextPageToken'),
       },
     },
-    async ({ account, folderId, maxResults }) => {
+    async ({ account, folderId, maxResults, pageToken }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
 
         // Escape single quotes per Drive query syntax to prevent breaking out of the literal.
@@ -229,13 +370,16 @@ export function registerDriveTools(server: ToolRegistry): void {
         const res = await drive.files.list({
           q: `'${parent}' in parents and trashed = false`,
           pageSize: maxResults ?? 50,
-          fields: 'files(id,name,mimeType,modifiedTime,webViewLink,size,parents)',
+          fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink,size,parents)',
           supportsAllDrives: true,
           includeItemsFromAllDrives: true,
+          ...(pageToken ? { pageToken } : {}),
         });
 
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(res.data.files ?? [], null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(listResult('files', res.data.files ?? [], {
+            nextPageToken: res.data.nextPageToken,
+          }), null, 2) }],
         };
       } catch (error: any) {
         return handleDriveError(error, account as Account);
@@ -248,40 +392,75 @@ export function registerDriveTools(server: ToolRegistry): void {
   server.registerTool(
     'drive_upload',
     {
-      description: 'Upload a local file to Google Drive. Pass `convertTo` to import it as a native, editable Google Doc/Sheet/Slides/Drawing instead of storing the raw bytes.',
+      description: 'Upload a file to Google Drive, from inline base64 content or (when this server exposes the host filesystem) a local path. Pass `convertTo` to import it as a native, editable Google Doc/Sheet/Slides/Drawing instead of storing the raw bytes.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        localPath: z.string().describe('Absolute path to file on disk'),
         filename: z.string().describe('Name as it appears in Drive'),
-        mimeType: z.string().optional().describe('Source MIME type of the local file (inferred from extension if omitted). With `convertTo`, this is the format Drive imports from.'),
-        convertTo: z.enum([
-          'application/vnd.google-apps.document',
-          'application/vnd.google-apps.spreadsheet',
-          'application/vnd.google-apps.presentation',
-          'application/vnd.google-apps.drawing',
-        ]).optional().describe('Convert the upload into this native Google Workspace type on import (e.g. upload .md/.html/.docx/.txt with convertTo=...google-apps.document to get a real Google Doc). Source must be an importable format. Omit to store the file as-is.'),
-        parentFolderId: z.string().optional().describe('Parent folder ID (defaults to My Drive root)'),
+        contentBase64: z.string().optional().describe(`Base64-encoded file content. Exactly one of contentBase64${localFiles ? ' or localPath' : ''} is required. Decoded size is capped at ${MAX_UPLOAD_BASE64_BYTES / (1024 * 1024)} MB.`),
+        ...(localFiles
+          ? {
+              localPath: z.string().min(1).optional().describe('Absolute path of the SOURCE file on disk to upload (on the machine running the server; this is not savePath). Exactly one of contentBase64 or localPath is required.'),
+            }
+          : {}),
+        mimeType: z.string().optional().describe('Source MIME type of the content (inferred from filename if omitted). With `convertTo`, this is the format Drive imports from.'),
+        convertTo: z.enum(CONVERT_TO_VALUES).optional().describe('Convert the upload into this native Google Workspace type on import: "document" | "spreadsheet" | "presentation" | "drawing" (full application/vnd.google-apps.* ids also accepted). E.g. upload .md/.html/.docx/.txt with convertTo=document to get a real Google Doc. Source must be an importable format. Omit to store the file as-is.'),
+        parentFolderId: z.string().optional().describe('Parent folder ID, not parentId. Defaults to My Drive root'),
       },
     },
-    async ({ account, localPath, filename, mimeType: mimeTypeArg, convertTo, parentFolderId }) => {
+    async (args) => {
+      const { account, filename, contentBase64, mimeType: mimeTypeArg, convertTo, parentFolderId } = args;
+      // Declared only when the context may read host files (see the shape).
+      const { localPath: localPathArg } = args as { localPath?: string };
+      if (localPathArg && !localFiles) return hostFilesRefused(account, 'localPath');
+      const hasBase64 = contentBase64 !== undefined;
+      const hasLocalPath = !!localPathArg;
+      if (hasBase64 === hasLocalPath) {
+        return invalidParams(
+          account as Account,
+          `Pass exactly one of contentBase64${localFiles ? ' or localPath' : ''}.`,
+          localFiles
+            ? 'Use contentBase64 for inline content, or localPath for a file already on the machine running the server.'
+            : 'Pass contentBase64 with the file\'s base64-encoded content.',
+        );
+      }
       try {
-        const auth = await getClient(account as Account);
-        const drive = driveClient({ version: 'v3', auth });
+        let media: { mimeType: string; body: Readable };
+        if (hasBase64) {
+          const maxB64Length = Math.ceil(MAX_UPLOAD_BASE64_BYTES / 3) * 4 + 4;
+          if (contentBase64!.length > maxB64Length) {
+            return invalidParams(
+              account as Account,
+              `Base64-encoded contentBase64 string length ${contentBase64!.length} exceeds the ${maxB64Length} character limit (implies decoded size over ${MAX_UPLOAD_BASE64_BYTES} bytes).`,
+              'Upload a smaller file, or use localPath if this server exposes the host filesystem.',
+            );
+          }
+          const buf = Buffer.from(contentBase64!, 'base64');
+          if (buf.length > MAX_UPLOAD_BASE64_BYTES) {
+            return invalidParams(
+              account as Account,
+              `Decoded contentBase64 is ${buf.length} bytes, over the ${MAX_UPLOAD_BASE64_BYTES} byte cap.`,
+              'Upload a smaller file, or use localPath if this server exposes the host filesystem.',
+            );
+          }
+          media = { mimeType: mimeTypeArg ?? (mime.lookup(filename) || 'application/octet-stream'), body: Readable.from(buf) };
+        } else {
+          media = {
+            mimeType: mimeTypeArg ?? (mime.lookup(localPathArg!) || 'application/octet-stream'),
+            body: await openLocalReadStream(localPathArg!),
+          };
+        }
 
-        const resolvedMime = mimeTypeArg ?? (mime.lookup(localPath) || 'application/octet-stream');
-        const fileStream = fs.createReadStream(localPath);
+        const auth = await getClientFn(account as Account);
+        const drive = driveClient({ version: 'v3', auth });
 
         const res = await drive.files.create({
           requestBody: {
             name: filename,
             parents: parentFolderId ? [parentFolderId] : undefined,
             // Setting a google-apps target type makes Drive convert the media on import.
-            ...(convertTo ? { mimeType: convertTo } : {}),
+            ...(convertTo ? { mimeType: resolveConvertTarget(convertTo) } : {}),
           },
-          media: {
-            mimeType: resolvedMime,
-            body: fileStream,
-          },
+          media,
           fields: 'id,name,mimeType,webViewLink,size',
           supportsAllDrives: true,
         });
@@ -294,23 +473,26 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
   );
 
-  server.registerTool(
+  registerHostFileTool(
     'drive_download',
     {
       description: 'Download a binary file from Drive to local disk. For Google Workspace formats (Docs, Sheets, Slides), use drive_export instead.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        savePath: z.string().describe('Absolute directory path to save into'),
-        filename: z.string().describe('Filename to save as'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        savePath: z.string().min(1).describe('Absolute DIRECTORY path to save into (created if missing, on the machine running the server); the file name comes from `filename`'),
+        filename: z.string().optional().describe('Filename to save as (defaults to the file name in Drive)'),
       },
     },
     async ({ account, fileId, savePath, filename }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
 
-        const dest = prepareLocalDest(savePath, filename);
+        const name = filename
+          ?? (await drive.files.get({ fileId, fields: 'name', supportsAllDrives: true })).data.name
+          ?? fileId;
+        const dest = prepareLocalDest(savePath, name);
         const res = await drive.files.get(
           { fileId, alt: 'media', supportsAllDrives: true },
           { responseType: 'stream' },
@@ -329,24 +511,30 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
   );
 
-  server.registerTool(
+  registerHostFileTool(
     'drive_export',
     {
       description: 'Export a Google Workspace document (Doc, Sheet, Slide) to a standard format and save to disk. Supported: PDF, DOCX, XLSX, PPTX, TXT, CSV, Markdown (text/markdown for Docs).',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
         mimeType: z.string().describe('Target export MIME type (e.g. "application/pdf", "text/markdown", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")'),
-        savePath: z.string().describe('Absolute directory path to save into'),
-        filename: z.string().describe('Filename to save as'),
+        savePath: z.string().min(1).describe('Absolute DIRECTORY path to save into (created if missing, on the machine running the server); the file name comes from `filename`'),
+        filename: z.string().optional().describe('Filename to save as (defaults to the Drive name plus the extension implied by mimeType)'),
       },
     },
     async ({ account, fileId, mimeType: exportMime, savePath, filename }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
 
-        const dest = prepareLocalDest(savePath, filename);
+        let name = filename;
+        if (!name) {
+          const meta = await drive.files.get({ fileId, fields: 'name', supportsAllDrives: true });
+          const ext = mime.extension(exportMime);
+          name = `${meta.data.name ?? fileId}${ext ? `.${ext}` : ''}`;
+        }
+        const dest = prepareLocalDest(savePath, name);
         const res = await drive.files.export(
           { fileId, mimeType: exportMime },
           { responseType: 'stream' },
@@ -372,12 +560,12 @@ export function registerDriveTools(server: ToolRegistry): void {
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
         name: z.string().describe('Folder name'),
-        parentFolderId: z.string().optional().describe('Parent folder ID (defaults to My Drive root)'),
+        parentFolderId: z.string().optional().describe('Parent folder ID, not parentId. Defaults to My Drive root'),
       },
     },
     async ({ account, name, parentFolderId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.files.create({
           requestBody: {
@@ -403,22 +591,29 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Rename, move, or replace content of a Drive file. Any combination in one call. For untrash, use drive_untrash.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
         newName: z.string().optional().describe('New filename'),
-        newParentFolderId: z.string().optional().describe('Move to this folder'),
-        localPath: z.string().optional().describe('Replace file content with this local file'),
-        mimeType: z.string().optional().describe('MIME type of the replacement file (required if localPath is provided)'),
-        convertTo: z.enum([
-          'application/vnd.google-apps.document',
-          'application/vnd.google-apps.spreadsheet',
-          'application/vnd.google-apps.presentation',
-          'application/vnd.google-apps.drawing',
-        ]).optional().describe('When replacing content via localPath, convert the new content into this native Google Workspace type on import (e.g. replace a Google Doc body from a local .docx). Source must be an importable format.'),
+        newParentFolderId: z.string().optional().describe('Move to this folder, named newParentFolderId here, not parentFolderId'),
+        ...(localFiles
+          ? {
+              localPath: z.string().optional().describe('Replace file content with this local file (path on the machine running the server)'),
+              mimeType: z.string().optional().describe('MIME type of the replacement file (required if localPath is provided)'),
+              convertTo: z.enum(CONVERT_TO_VALUES).optional().describe('When replacing content via localPath, convert the new content into this native Google Workspace type on import: "document" | "spreadsheet" | "presentation" | "drawing" (full application/vnd.google-apps.* ids also accepted).'),
+            }
+          : {}),
       },
     },
-    async ({ account, fileId, newName, newParentFolderId, localPath: localPathArg, mimeType: mimeTypeArg, convertTo }) => {
+    async (args) => {
+      const { account, fileId, newName, newParentFolderId } = args;
+      // Declared only when the context may read host files (see the shape).
+      const { localPath: localPathArg, mimeType: mimeTypeArg, convertTo } = args as {
+        localPath?: string;
+        mimeType?: string;
+        convertTo?: (typeof CONVERT_TO_VALUES)[number];
+      };
+      if (localPathArg && !localFiles) return hostFilesRefused(account, 'localPath');
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
 
         const requestBody: any = {};
@@ -440,9 +635,9 @@ export function registerDriveTools(server: ToolRegistry): void {
         if (localPathArg) {
           params.media = {
             mimeType: mimeTypeArg ?? (mime.lookup(localPathArg) || 'application/octet-stream'),
-            body: fs.createReadStream(localPathArg),
+            body: await openLocalReadStream(localPathArg),
           };
-          if (convertTo) requestBody.mimeType = convertTo;
+          if (convertTo) requestBody.mimeType = resolveConvertTarget(convertTo);
         }
 
         const res = await drive.files.update(params);
@@ -463,12 +658,12 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Permanently delete a file or folder from Google Drive. Irreversible. Use drive_trash for recoverable deletion.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
       },
     },
     async ({ account, fileId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         await drive.files.delete({ fileId, supportsAllDrives: true });
         return {
@@ -486,12 +681,12 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Move a file to Google Drive trash. Recoverable from Drive UI or via drive_untrash.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
       },
     },
     async ({ account, fileId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         await drive.files.update({
           fileId,
@@ -513,12 +708,12 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Restore a trashed file from Google Drive trash back to its previous location.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
       },
     },
     async ({ account, fileId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.files.update({
           fileId,
@@ -545,7 +740,7 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
     async ({ account }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         await drive.files.emptyTrash({});
         return {
@@ -565,14 +760,14 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Duplicate a file in Google Drive (does not work on folders)',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID to copy'),
+        fileId: z.string().min(1).describe('Google Drive file ID to copy'),
         newName: z.string().optional().describe('Name for the copy (default: "Copy of <original>")'),
-        parentFolderId: z.string().optional().describe('Where to put the copy (default: same folder)'),
+        parentFolderId: z.string().optional().describe('Where to put the copy, not parentId. Default: same folder'),
       },
     },
     async ({ account, fileId, newName, parentFolderId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.files.copy({
           fileId,
@@ -598,13 +793,13 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Move a file between folders by replacing its parents. To move to multiple parents, list all of them.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        newParentFolderId: z.string().describe('Destination folder ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        newParentFolderId: z.string().min(1).describe('Destination folder ID, named newParentFolderId here, not parentFolderId'),
       },
     },
     async ({ account, fileId, newParentFolderId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const current = await drive.files.get({ fileId, fields: 'parents', supportsAllDrives: true });
         const res = await drive.files.update({
@@ -631,7 +826,7 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Share a file or folder with a user, group, domain, or anyone with the link',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
         type: z.enum(['user', 'group', 'domain', 'anyone']).describe('Permission type'),
         role: z.enum(['reader', 'commenter', 'writer', 'fileOrganizer', 'organizer', 'owner']).describe('Permission role'),
         emailAddress: z.string().optional().describe('Required when type is "user" or "group"'),
@@ -643,8 +838,37 @@ export function registerDriveTools(server: ToolRegistry): void {
       },
     },
     async ({ account, fileId, type, role, emailAddress, domain, sendNotification, emailMessage, transferOwnership, expirationTime }) => {
+      if ((type === 'user' || type === 'group') && !emailAddress) {
+        return invalidParams(
+          account as Account,
+          `type is "${type}" but emailAddress was not supplied.`,
+          'Pass emailAddress, the grantee to share with.',
+        );
+      }
+      if (type === 'domain' && !domain) {
+        return invalidParams(
+          account as Account,
+          'type is "domain" but domain was not supplied.',
+          'Pass domain, e.g. "example.com".',
+        );
+      }
+      {
+        // Outbound allowlist (off unless GOOGLE_OUTBOUND_ALLOWLIST is set): user/group
+        // grantees must match, a domain share needs its exact "@domain" entry, "anyone" is refused while active.
+        const list = resolveOutboundAllowlist();
+        if (list) {
+          if ((type === 'user' || type === 'group') && emailAddress) {
+            const outbound = checkOutbound('drive_share grantee', [emailAddress], String(account));
+            if (outbound) return outbound;
+          } else if (type === 'domain' && domain && !list.entries.includes(`@${domain.trim().toLowerCase()}`)) {
+            return outboundDeniedEnvelope('drive_share domain grantee', [`@${domain}`], String(account));
+          } else if (type === 'anyone') {
+            return outboundDeniedEnvelope('drive_share grantee', ['anyone (link sharing)'], String(account));
+          }
+        }
+      }
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const requestBody: any = { type, role, emailAddress, domain };
         if (expirationTime) requestBody.expirationTime = expirationTime;
@@ -674,12 +898,12 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'List all people and groups who have access to a Drive file or folder',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
       },
     },
     async ({ account, fileId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.permissions.list({
           fileId,
@@ -701,8 +925,8 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Change the role and/or expirationTime of an existing permission without removing it. Use "removeExpiration=true" to clear an existing expirationTime.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        permissionId: z.string().describe('Permission ID from drive_list_permissions'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        permissionId: z.string().min(1).describe('Permission ID from drive_list_permissions'),
         role: z.enum(['reader', 'commenter', 'writer', 'fileOrganizer', 'organizer', 'owner']).optional()
           .describe('New role'),
         expirationTime: z.string().optional()
@@ -715,7 +939,7 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
     async ({ account, fileId, permissionId, role, expirationTime, removeExpiration, transferOwnership }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const requestBody: any = {};
         if (role) requestBody.role = role;
@@ -745,13 +969,13 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Revoke access to a Drive file for a specific permission',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        permissionId: z.string().describe('Permission ID from drive_list_permissions'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        permissionId: z.string().min(1).describe('Permission ID from drive_list_permissions'),
       },
     },
     async ({ account, fileId, permissionId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         await drive.permissions.delete({ fileId, permissionId, supportsAllDrives: true });
         return {
@@ -771,7 +995,7 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Create a comment on a Drive file. Works on Docs, Sheets, Slides, PDFs, and any Drive file. The optional anchor is a JSON string describing the document region (see Drive "Manage comments" guide).',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
         content: z.string().describe('Plain text comment content'),
         anchor: z.string().optional().describe('Region anchor (JSON string). Optional.'),
         quotedFileContent: z.object({
@@ -782,7 +1006,7 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
     async ({ account, fileId, content, anchor, quotedFileContent }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const requestBody: any = { content };
         if (anchor) requestBody.anchor = anchor;
@@ -808,7 +1032,7 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'List comments on a Drive file with pagination',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
         includeDeleted: coerceBoolean.optional().describe('Include deleted comments (default: false)'),
         pageSize: z.number().min(1).max(100).optional().describe('Max comments per page (default: 20)'),
         pageToken: z.string().optional().describe('Token from a previous page'),
@@ -817,7 +1041,7 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
     async ({ account, fileId, includeDeleted, pageSize, pageToken, startModifiedTime }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.comments.list({
           fileId,
@@ -842,14 +1066,14 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Get a single comment by ID',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        commentId: z.string().describe('Comment ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        commentId: z.string().min(1).describe('Comment ID'),
         includeDeleted: coerceBoolean.optional(),
       },
     },
     async ({ account, fileId, commentId, includeDeleted }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.comments.get({
           fileId,
@@ -872,14 +1096,14 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Edit the content of an existing comment (PATCH semantics)',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        commentId: z.string().describe('Comment ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        commentId: z.string().min(1).describe('Comment ID'),
         content: z.string().describe('New plain text content'),
       },
     },
     async ({ account, fileId, commentId, content }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.comments.update({
           fileId,
@@ -902,13 +1126,13 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Delete a comment from a Drive file',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        commentId: z.string().describe('Comment ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        commentId: z.string().min(1).describe('Comment ID'),
       },
     },
     async ({ account, fileId, commentId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         await drive.comments.delete({ fileId, commentId });
         return {
@@ -928,8 +1152,8 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Reply to a comment. Optionally close or reopen the thread by setting action to "resolve" or "reopen".',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        commentId: z.string().describe('Parent comment ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        commentId: z.string().min(1).describe('Parent comment ID'),
         content: z.string().describe('Reply content (required even when only changing action)'),
         action: z.enum(['resolve', 'reopen']).optional()
           .describe('Optional action to apply to the thread on this reply'),
@@ -937,7 +1161,7 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
     async ({ account, fileId, commentId, content, action }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const requestBody: any = { content };
         if (action) requestBody.action = action;
@@ -963,8 +1187,8 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'List replies on a comment with pagination',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        commentId: z.string().describe('Parent comment ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        commentId: z.string().min(1).describe('Parent comment ID'),
         includeDeleted: coerceBoolean.optional(),
         pageSize: z.number().min(1).max(100).optional(),
         pageToken: z.string().optional(),
@@ -972,7 +1196,7 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
     async ({ account, fileId, commentId, includeDeleted, pageSize, pageToken }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.replies.list({
           fileId,
@@ -997,15 +1221,15 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Edit the content of an existing reply',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        commentId: z.string().describe('Parent comment ID'),
-        replyId: z.string().describe('Reply ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        commentId: z.string().min(1).describe('Parent comment ID'),
+        replyId: z.string().min(1).describe('Reply ID'),
         content: z.string().describe('New plain text content'),
       },
     },
     async ({ account, fileId, commentId, replyId, content }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.replies.update({
           fileId,
@@ -1029,14 +1253,14 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Delete a reply from a comment thread',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        commentId: z.string().describe('Parent comment ID'),
-        replyId: z.string().describe('Reply ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        commentId: z.string().min(1).describe('Parent comment ID'),
+        replyId: z.string().min(1).describe('Reply ID'),
       },
     },
     async ({ account, fileId, commentId, replyId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         await drive.replies.delete({ fileId, commentId, replyId });
         return {
@@ -1056,14 +1280,14 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'List version history of a Drive file',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
         pageSize: z.number().min(1).max(200).optional(),
         pageToken: z.string().optional(),
       },
     },
     async ({ account, fileId, pageSize, pageToken }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.revisions.list({
           fileId,
@@ -1086,8 +1310,8 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Pin a revision (keepForever=true) against the 200-version cap, or change its published state for Docs.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        revisionId: z.string().describe('Revision ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        revisionId: z.string().min(1).describe('Revision ID'),
         keepForever: coerceBoolean.optional().describe('Pin this revision indefinitely'),
         published: coerceBoolean.optional().describe('Toggle published state (Docs only)'),
         publishAuto: coerceBoolean.optional().describe('Auto-publish subsequent revisions'),
@@ -1096,7 +1320,7 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
     async ({ account, fileId, revisionId, keepForever, published, publishAuto, publishedOutsideDomain }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const requestBody: any = {};
         if (keepForever !== undefined) requestBody.keepForever = keepForever;
@@ -1125,13 +1349,13 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Delete a specific revision of a file',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        revisionId: z.string().describe('Revision ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        revisionId: z.string().min(1).describe('Revision ID'),
       },
     },
     async ({ account, fileId, revisionId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         await drive.revisions.delete({ fileId, revisionId });
         return {
@@ -1151,14 +1375,14 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'List pending "Request access" proposals on a file. Useful for programmatic triage of share requests from external collaborators.',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
         pageSize: z.number().min(1).max(100).optional(),
         pageToken: z.string().optional(),
       },
     },
     async ({ account, fileId, pageSize, pageToken }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.accessproposals.list({
           fileId,
@@ -1180,8 +1404,8 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Resolve a pending access proposal. Action ACCEPT requires a role array (e.g. ["reader"]).',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        fileId: z.string().describe('Google Drive file ID'),
-        proposalId: z.string().describe('Access proposal ID'),
+        fileId: z.string().min(1).describe('Google Drive file ID'),
+        proposalId: z.string().min(1).describe('Access proposal ID'),
         action: z.enum(['ACCEPT', 'DENY']).describe('Whether to accept or deny the proposal'),
         role: coerceArray(z.enum(['reader', 'commenter', 'writer', 'fileOrganizer'])).optional()
           .describe('Required when action is ACCEPT'),
@@ -1192,7 +1416,7 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
     async ({ account, fileId, proposalId, action, role, view, sendNotification }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const requestBody: any = { action };
         if (role) requestBody.role = role;
@@ -1228,7 +1452,7 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
     async ({ account, pageSize, pageToken, q }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.drives.list({
           pageSize: pageSize ?? 50,
@@ -1251,12 +1475,12 @@ export function registerDriveTools(server: ToolRegistry): void {
       description: 'Get metadata for a specific shared drive',
       inputSchema: {
         account: accountEnum.describe('Google account alias'),
-        driveId: z.string().describe('Shared drive ID'),
+        driveId: z.string().min(1).describe('Shared drive ID'),
       },
     },
     async ({ account, driveId }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.drives.get({
           driveId,
@@ -1283,10 +1507,10 @@ export function registerDriveTools(server: ToolRegistry): void {
         'revision history, and permissions do not transfer. move=true trashes the source after a ' +
         'successful copy and requires deletes to be allowed by write-control.',
       inputSchema: {
-        fromAccount: accountEnum.describe('Source account alias'),
-        toAccount: accountEnum.describe('Target account alias'),
-        fileId: z.string().describe('File ID in the source account (folders are not supported)'),
-        parentFolderId: z.string().optional().describe('Target folder ID (default: target My Drive root)'),
+        fromAccount: requiredAccountEnum.describe('Source account alias'),
+        toAccount: requiredAccountEnum.describe('Target account alias'),
+        fileId: z.string().min(1).describe('File ID in the source account (folders are not supported)'),
+        parentFolderId: z.string().optional().describe('Target folder ID, not parentId. Default: target My Drive root'),
         newName: z.string().optional().describe('Rename the copy (default: keep the source name)'),
         move: coerceBoolean.optional().describe('Trash the source after a successful copy (delete-gated)'),
       },
@@ -1295,7 +1519,7 @@ export function registerDriveTools(server: ToolRegistry): void {
       // op candidate is transfer_move, not transfer: allowing "drive:transfer" must not grant the delete
       const moveRef = { name: 'drive_transfer_move', service: 'drive', cud: 'delete' as const };
       if (move && !isAllowed(moveRef, server.policy)) {
-        return writeDisabledResult(moveRef, server.policy);
+        return writeDisabledResult(moveRef, server.policy, fromAccount as string);
       }
       if (fromAccount === toAccount) {
         return {
@@ -1313,10 +1537,10 @@ export function registerDriveTools(server: ToolRegistry): void {
       }
       let activeAccount = fromAccount as Account;
       try {
-        const sourceAuth = await getClient(fromAccount as Account);
+        const sourceAuth = await getClientFn(fromAccount as Account);
         const sourceDrive = driveClient({ version: 'v3', auth: sourceAuth });
         activeAccount = toAccount as Account;
-        const targetAuth = await getClient(toAccount as Account);
+        const targetAuth = await getClientFn(toAccount as Account);
         const targetDrive = driveClient({ version: 'v3', auth: targetAuth });
         activeAccount = fromAccount as Account;
 
@@ -1334,13 +1558,14 @@ export function registerDriveTools(server: ToolRegistry): void {
                 message: 'Folders cannot be transferred.',
                 hint: 'Transfer files individually, or create the folder on the target with drive_create_folder.',
                 retriable: false,
+                account: fromAccount as string,
               }),
             }],
             isError: true as const,
           };
         }
         const intendedName = newName ?? meta.data.name ?? 'transferred-file';
-        const targetEmail = ACCOUNT_CONFIG[toAccount as Account].email;
+        const targetEmail = server.accountSet().configs[toAccount as Account].email;
 
         const finish = async (
           data: drive_v3.Schema$File,
@@ -1385,6 +1610,7 @@ export function registerDriveTools(server: ToolRegistry): void {
                 error: 'unsupported_type',
                 message: `Cannot transfer "${meta.data.mimeType}": share+copy was blocked and this native type has no export fallback.`,
                 retriable: false,
+                account: fromAccount as string,
               }),
             }],
             isError: true as const,
@@ -1427,7 +1653,7 @@ export function registerDriveTools(server: ToolRegistry): void {
     },
     async ({ account }) => {
       try {
-        const auth = await getClient(account as Account);
+        const auth = await getClientFn(account as Account);
         const drive = driveClient({ version: 'v3', auth });
         const res = await drive.about.get({
           fields: 'user,storageQuota',
@@ -1621,7 +1847,7 @@ async function downloadAndUpload(
       },
       media: {
         mimeType: plan.kind === 'native' ? plan.exportMime : (sourceMime ?? 'application/octet-stream'),
-        body: fs.createReadStream(tmp),
+        body: await openLocalReadStream(tmp),
       },
       supportsAllDrives: true,
       fields: 'id,name,mimeType,webViewLink',
