@@ -50,6 +50,12 @@ async function main() {
     return;
   }
 
+  if (process.argv.includes('token-check')) {
+    const { runTokenCheckCli } = await import('./token-check.js');
+    process.exitCode = await runTokenCheckCli(process.argv);
+    return;
+  }
+
   if (process.argv.includes('reset')) {
     const { runResetCli } = await import('./doctor.js');
     process.exitCode = await runResetCli(process.argv);
