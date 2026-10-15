@@ -172,6 +172,33 @@ export const BUNDLE_CATALOG: Record<string, BundleCatalogEntry> = {
     risk: 'high',
     workspaceOnly: true,
   },
+  // Fork (gmcp): narrow stand-ins for BASE_SCOPES, used with includesBase: false
+  // so each account consents only to what the deployment needs.
+  gmail_readonly: {
+    scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+    description: 'Search and read mail (no changes to the mailbox).',
+    risk: 'medium',
+  },
+  gmail_compose: {
+    scopes: ['https://www.googleapis.com/auth/gmail.compose'],
+    description: 'Create and edit drafts. Google also lets this scope send them; write-control is what blocks sending.',
+    risk: 'high',
+  },
+  calendar_readonly: {
+    scopes: ['https://www.googleapis.com/auth/calendar.readonly'],
+    description: 'List calendars and read events.',
+    risk: 'low',
+  },
+  calendar_events: {
+    scopes: ['https://www.googleapis.com/auth/calendar.events'],
+    description: 'Create and update events. Attendees get invitation email; gate them with GOOGLE_OUTBOUND_ALLOWLIST.',
+    risk: 'medium',
+  },
+  drive_readonly: {
+    scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+    description: 'Search and read Drive files (no edits or sharing).',
+    risk: 'medium',
+  },
 };
 
 /** One-way soft-rename map (UD5): empty at 6.0.0; the mechanism ships now so a

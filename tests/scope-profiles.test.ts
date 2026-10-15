@@ -23,8 +23,8 @@ afterEach(() => {
 });
 
 describe('bundle catalog', () => {
-  it('carries the 19 v5 bundles plus the analytics pair plus admin, each with description and risk', () => {
-    expect(Object.keys(BUNDLE_CATALOG)).toHaveLength(22);
+  it('carries the 19 v5 bundles plus the analytics pair plus admin plus the 5 fork narrow bundles, each with description and risk', () => {
+    expect(Object.keys(BUNDLE_CATALOG)).toHaveLength(27);
     expect(BUNDLE_CATALOG.admin.scopes).toEqual(ADMIN_SCOPES);
     expect(BUNDLE_CATALOG.admin.workspaceOnly).toBe(true);
     for (const [name, entry] of Object.entries(BUNDLE_CATALOG)) {
@@ -35,7 +35,7 @@ describe('bundle catalog', () => {
   });
 
   it('derived OPTIONAL_SCOPE_BUNDLES keeps the v5 shape without admin', () => {
-    expect(Object.keys(OPTIONAL_SCOPE_BUNDLES)).toHaveLength(21);
+    expect(Object.keys(OPTIONAL_SCOPE_BUNDLES)).toHaveLength(26);
     expect(OPTIONAL_SCOPE_BUNDLES.admin).toBeUndefined();
     expect(OPTIONAL_SCOPE_BUNDLES.gmail_settings_sharing).toEqual([
       'https://www.googleapis.com/auth/gmail.settings.sharing',
@@ -82,6 +82,32 @@ describe('acceptance: per-account consent from config.json (live set)', () => {
 
     expect(getAdminAccounts()).toEqual(['work']);
     expect(getOptionalBundles().sort()).toEqual(['chat', 'gmail_settings']);
+  });
+
+  it('fork narrow profile: includesBase false consents to exactly the five narrow scopes', () => {
+    const xdg = process.env.XDG_CONFIG_HOME!;
+    const dir = path.join(xdg, 'mcp-google-multi');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      path.join(dir, 'config.json'),
+      JSON.stringify({
+        version: 1,
+        accounts: { personal: { email: 'p@gmail.example', scopeProfile: 'narrow' } },
+        scopeProfiles: {
+          narrow: {
+            includesBase: false,
+            bundles: ['gmail_readonly', 'gmail_compose', 'calendar_readonly', 'calendar_events', 'drive_readonly'],
+          },
+        },
+      }),
+    );
+    delete process.env.GOOGLE_ACCOUNTS;
+    invalidateAccountSet();
+
+    const P = 'https://www.googleapis.com/auth/';
+    expect(resolveScopesForAccount('personal').sort()).toEqual(
+      ['gmail.readonly', 'gmail.compose', 'calendar.readonly', 'calendar.events', 'drive.readonly'].map((s) => P + s).sort(),
+    );
   });
 });
 
