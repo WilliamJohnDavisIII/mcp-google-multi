@@ -7,17 +7,19 @@ Fork of mcp-google-multi v6.0.0 with two patches (branch `gmcp`):
 
 Repo on the mini: `~/Documents/code/me/mcp-google-multi`. Node 22 LTS is installed keg-only at `/opt/homebrew/opt/node@22` (your default `node` stays 26).
 
-Tunnel hostname: `gmcp.lampstand.digital`. Owner address (the one account allowed to connect Claude): `liam@lampstand.digital`.
+Tunnel hostname: `gmcp.davisregenerative.com`. Owner address (the one account allowed to connect Claude): `liam@davisregenerative.com`.
 
 ---
 
-## Now: send the work2 request
+## Accounts
 
-Ask work2's admin, in writing:
+| Account | Served by | Alias |
+|---|---|---|
+| Personal Gmail | gmcp | `personal` |
+| Davis Regenerative (`liam@davisregenerative.com`, you admin it) | gmcp | `davisregen` |
+| Lampstand Digital (`liam@lampstand.digital`, you don't admin it) | claude.ai's built-in Gmail, Calendar and Drive connectors, unchanged | none |
 
-> I'd like to connect my mailbox, calendar and Drive (read access, plus creating drafts and calendar events) to a personal OAuth app I run on my own hardware, client ID `<id>`. It would need to be Trusted for my account only. The data passes through Cloudflare and a server at my home. Is that within our data policy?
-
-You need the client ID from M1 step 5 first. Everything below works with personal + work1 alone.
+Lampstand stays on the built-in connectors, so its admin never has to approve this app. Keep those connectors connected.
 
 ## M0 · Fork and verify: done
 
@@ -27,14 +29,14 @@ You need the client ID from M1 step 5 first. Everything below works with persona
 
 ## M1 · Google Cloud + local test (one evening)
 
-In the Workspace org you admin, at console.cloud.google.com:
+Signed in as `liam@davisregenerative.com`, at console.cloud.google.com:
 
 1. New project (e.g. `gmcp`). APIs & Services → enable **Gmail API**, **Google Calendar API**, **Google Drive API**.
 2. Google Auth Platform → **Branding**: app name, your email as support + developer contact. No logo.
-3. **Audience**: External. Add personal, work1 (and work2) as test users.
+3. **Audience**: External. Add your personal Gmail and `liam@davisregenerative.com` as test users.
 4. **Data access**: add `gmail.readonly`, `gmail.compose`, `calendar.readonly`, `calendar.events`, `drive.readonly`, `openid`, `email`.
 5. **Clients → Create → Web application**. Redirect URIs:
-   - `https://gmcp.lampstand.digital/callback`
+   - `https://gmcp.davisregenerative.com/callback`
    - `http://localhost:4243/callback` (for this milestone; delete after M3a)
 
    Put the client ID and secret in your password manager.
@@ -47,7 +49,7 @@ export PATH=/opt/homebrew/opt/node@22/bin:$PATH
 export XDG_CONFIG_HOME=$HOME/.gmcp-m1
 mkdir -p $XDG_CONFIG_HOME/mcp-google-multi && cp deploy/macos/config.example.json $XDG_CONFIG_HOME/mcp-google-multi/config.json
 # edit that config.json: keep only "personal" with your gmail address
-export MCP_TRANSPORT=http MCP_PUBLIC_URL=http://localhost:4243 MCP_OWNER_EMAILS=liam@lampstand.digital
+export MCP_TRANSPORT=http MCP_PUBLIC_URL=http://localhost:4243 MCP_OWNER_EMAILS=liam@davisregenerative.com
 export MCP_ALLOWED_ORIGINS=http://localhost:6274 GOOGLE_TOOLSETS=gmail
 export GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=...
 node dist/index.js
@@ -85,18 +87,19 @@ Cloudflare tunnel:
 
 ```bash
 brew install cloudflared && brew pin cloudflared node@22
-cloudflared tunnel login                     # pick your domain
+mv ~/.cloudflared/cert.pem ~/.cloudflared/cert-artosmarket.pem   # keep the artos cert; login refuses to overwrite it
+cloudflared tunnel login                     # pick davisregenerative.com
 cloudflared tunnel create gmcp               # note the UUID
 sudo mkdir -p /etc/cloudflared
 sudo install -m 600 ~/.cloudflared/<UUID>.json /etc/cloudflared/
 # write /etc/cloudflared/config.yml from deploy/macos/cloudflared-config.example.yml
-cloudflared tunnel route dns gmcp gmcp.lampstand.digital
+cloudflared tunnel route dns gmcp gmcp.davisregenerative.com
 sudo cloudflared service install
 ```
 
-From off your network: `curl https://gmcp.lampstand.digital/health` returns `{"status":"ok",…}`.
+From off your network: `curl https://gmcp.davisregenerative.com/health` returns `{"status":"ok",…}`.
 
-claude.ai → Settings → Connectors → Add custom connector. Name "Google (all accounts)", URL `https://gmcp.lampstand.digital/mcp`, default OAuth. Sign in as the owner address.
+claude.ai → Settings → Connectors → Add custom connector. Name "Google (all accounts)", URL `https://gmcp.davisregenerative.com/mcp`, default OAuth. Sign in as the owner address.
 
 **Pass:** Gmail search works from the Claude mobile app on cellular.
 
@@ -114,13 +117,13 @@ Rate limiting rules → one per-IP rule: `http.request.uri.path in {"/authorize"
 
 Remove `http://localhost:4243/callback` from the OAuth client.
 
-**Pass:** M3a still works, a re-auth link still works, and `curl -i https://gmcp.lampstand.digital/mcp` from outside gets 403.
+**Pass:** M3a still works, a re-auth link still works, and `curl -i https://gmcp.davisregenerative.com/mcp` from outside gets 403.
 
-## M4 · work1 + Calendar + Drive
+## M4 · Davis Regenerative + Calendar + Drive
 
-1. work1 Admin console → Security → Access and data control → API controls → Manage Third-Party App Access → Configured apps → Add app → by client ID → scope to an OU/group with only you → **Trusted**.
-2. Toolsets are already `gmail,calendar,drive` in `gmcp.env`. Add work1 to `config.json` if it isn't, then `sudo launchctl kickstart -k system/local.gmcp.server`.
-3. Run the plan's per-alias test lines for personal and work1, plus "Search every account for 'invoice' this month."
+1. Davis Regenerative Admin console (admin.google.com) → Security → Access and data control → API controls → Manage Third-Party App Access → Configured apps → Add app → by client ID → scope to an OU/group with only you → **Trusted**.
+2. Toolsets are already `gmail,calendar,drive` in `gmcp.env`. Add `davisregen` to `config.json` if it isn't, then `sudo launchctl kickstart -k system/local.gmcp.server`.
+3. Run the plan's per-alias test lines for `personal` and `davisregen`, plus "Search every account for 'invoice' this month."
 
 ## M5 · Writes
 
@@ -128,7 +131,7 @@ Remove `http://localhost:4243/callback` from the OAuth client.
 2. `sudo -u gmcp /Users/gmcp/run.sh config check`: confirm exactly `gmail_create_draft`, `calendar_create_event` and `calendar_update_event` are enabled.
 3. If your plan has per-tool permissions, set those three to ask before running.
 
-**Pass:** draft created; "send it" refused; invite to stranger@example.com refused. Then disconnect the official Gmail, Calendar and Drive connectors.
+**Pass:** draft created; "send it" refused; invite to stranger@example.com refused. Keep the built-in Gmail, Calendar and Drive connectors: they serve Lampstand.
 
 ## M6 · Unattended operation
 
@@ -138,7 +141,7 @@ sudo pmset -a sleep 0 disksleep 0 powernap 0 autorestart 1 womp 1
 
 (Today `sleep` is 1 and only Amphetamine keeps the mini awake; `autorestart` and `womp` are already on.)
 
-- Uptime monitor (Better Stack or UptimeRobot): `https://gmcp.lampstand.digital/health` every 5 min, phone push.
+- Uptime monitor (Better Stack or UptimeRobot): `https://gmcp.davisregenerative.com/health` every 5 min, phone push.
 - Healthchecks.io: a daily check with a 1-hour grace; paste its URL into `HEALTHCHECKS_URL` in `gmcp.env`. The check runs at 06:15. Try it now with `sudo launchctl kickstart system/local.gmcp.tokencheck`, then `cat /Users/gmcp/logs/token-check.log`.
 - Cloudflare → Notifications → Tunnel health alert.
 - UPS on the mini and router.

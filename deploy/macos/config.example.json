@@ -2,7 +2,7 @@
   "version": 1,
   "accounts": {
     "personal": { "email": "you@gmail.com", "scopeProfile": "narrow" },
-    "work1": { "email": "you@org-you-admin.com", "scopeProfile": "narrow" }
+    "davisregen": { "email": "liam@davisregenerative.com", "scopeProfile": "narrow" }
   },
   "scopeProfiles": {
     "narrow": {
