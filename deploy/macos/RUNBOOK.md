@@ -7,7 +7,7 @@ Fork of mcp-google-multi v6.0.0 with two patches (branch `gmcp`):
 
 Repo on the mini: `~/Documents/code/me/mcp-google-multi`. Node 22 LTS is installed keg-only at `/opt/homebrew/opt/node@22` (your default `node` stays 26).
 
-Placeholders used below: `gmcp.example.com` = your tunnel hostname, `you@example.com` = the owner address.
+Tunnel hostname: `gmcp.lampstand.digital`. Owner address (the one account allowed to connect Claude): `liam@lampstand.digital`.
 
 ---
 
@@ -34,7 +34,7 @@ In the Workspace org you admin, at console.cloud.google.com:
 3. **Audience**: External. Add personal, work1 (and work2) as test users.
 4. **Data access**: add `gmail.readonly`, `gmail.compose`, `calendar.readonly`, `calendar.events`, `drive.readonly`, `openid`, `email`.
 5. **Clients → Create → Web application**. Redirect URIs:
-   - `https://gmcp.example.com/callback`
+   - `https://gmcp.lampstand.digital/callback`
    - `http://localhost:4243/callback` (for this milestone; delete after M3a)
 
    Put the client ID and secret in your password manager.
@@ -47,7 +47,7 @@ export PATH=/opt/homebrew/opt/node@22/bin:$PATH
 export XDG_CONFIG_HOME=$HOME/.gmcp-m1
 mkdir -p $XDG_CONFIG_HOME/mcp-google-multi && cp deploy/macos/config.example.json $XDG_CONFIG_HOME/mcp-google-multi/config.json
 # edit that config.json: keep only "personal" with your gmail address
-export MCP_TRANSPORT=http MCP_PUBLIC_URL=http://localhost:4243 MCP_OWNER_EMAILS=you@example.com
+export MCP_TRANSPORT=http MCP_PUBLIC_URL=http://localhost:4243 MCP_OWNER_EMAILS=liam@lampstand.digital
 export MCP_ALLOWED_ORIGINS=http://localhost:6274 GOOGLE_TOOLSETS=gmail
 export GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=...
 node dist/index.js
@@ -90,13 +90,13 @@ cloudflared tunnel create gmcp               # note the UUID
 sudo mkdir -p /etc/cloudflared
 sudo install -m 600 ~/.cloudflared/<UUID>.json /etc/cloudflared/
 # write /etc/cloudflared/config.yml from deploy/macos/cloudflared-config.example.yml
-cloudflared tunnel route dns gmcp gmcp.example.com
+cloudflared tunnel route dns gmcp gmcp.lampstand.digital
 sudo cloudflared service install
 ```
 
-From off your network: `curl https://gmcp.example.com/health` returns `{"status":"ok",…}`.
+From off your network: `curl https://gmcp.lampstand.digital/health` returns `{"status":"ok",…}`.
 
-claude.ai → Settings → Connectors → Add custom connector. Name "Google (all accounts)", URL `https://gmcp.example.com/mcp`, default OAuth. Sign in as the owner address.
+claude.ai → Settings → Connectors → Add custom connector. Name "Google (all accounts)", URL `https://gmcp.lampstand.digital/mcp`, default OAuth. Sign in as the owner address.
 
 **Pass:** Gmail search works from the Claude mobile app on cellular.
 
@@ -114,7 +114,7 @@ Rate limiting rules → one per-IP rule: `http.request.uri.path in {"/authorize"
 
 Remove `http://localhost:4243/callback` from the OAuth client.
 
-**Pass:** M3a still works, a re-auth link still works, and `curl -i https://gmcp.example.com/mcp` from outside gets 403.
+**Pass:** M3a still works, a re-auth link still works, and `curl -i https://gmcp.lampstand.digital/mcp` from outside gets 403.
 
 ## M4 · work1 + Calendar + Drive
 
@@ -138,7 +138,7 @@ sudo pmset -a sleep 0 disksleep 0 powernap 0 autorestart 1 womp 1
 
 (Today `sleep` is 1 and only Amphetamine keeps the mini awake; `autorestart` and `womp` are already on.)
 
-- Uptime monitor (Better Stack or UptimeRobot): `https://gmcp.example.com/health` every 5 min, phone push.
+- Uptime monitor (Better Stack or UptimeRobot): `https://gmcp.lampstand.digital/health` every 5 min, phone push.
 - Healthchecks.io: a daily check with a 1-hour grace; paste its URL into `HEALTHCHECKS_URL` in `gmcp.env`. The check runs at 06:15. Try it now with `sudo launchctl kickstart system/local.gmcp.tokencheck`, then `cat /Users/gmcp/logs/token-check.log`.
 - Cloudflare → Notifications → Tunnel health alert.
 - UPS on the mini and router.
