@@ -33,7 +33,7 @@ for k in master.key mcp-jwt.key; do
     (umask 077; openssl rand -base64 32 > $CONF/$k)
     print "Generated $CONF/$k. Copy it into your password manager."
   fi
-  chown $U:staff $CONF/$k; chmod 600 $CONF/$k
+  chown ${U}:staff $CONF/$k; chmod 600 $CONF/$k
 done
 
 if [[ ! -s $H/secrets/google-client-secret ]]; then
@@ -44,7 +44,7 @@ if [[ ! -s $H/secrets/google-client-secret ]]; then
   fi
   unset secret
 fi
-[[ -e $H/secrets/google-client-secret ]] && { chown $U:staff $H/secrets/google-client-secret; chmod 600 $H/secrets/google-client-secret; }
+[[ -e $H/secrets/google-client-secret ]] && { chown ${U}:staff $H/secrets/google-client-secret; chmod 600 $H/secrets/google-client-secret; }
 
 [[ -e $H/gmcp.env ]] || install -o $U -g staff -m 600 "$HERE/gmcp.env.example" $H/gmcp.env
 [[ -e $CONF/config.json ]] || install -o $U -g staff -m 600 "$HERE/config.example.json" $CONF/config.json
