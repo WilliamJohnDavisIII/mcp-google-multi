@@ -77,7 +77,7 @@ sudo deploy/macos/setup-user.sh        # creates hidden user gmcp, keys, asks fo
 sudo -u gmcp nano /Users/gmcp/gmcp.env  # MCP_PUBLIC_URL, MCP_OWNER_EMAILS, GOOGLE_CLIENT_ID, allowlist
 sudo -u gmcp nano /Users/gmcp/.config/mcp-google-multi/config.json   # your real aliases + emails
 sudo deploy/macos/deploy-app.sh
-sudo -u gmcp /Users/gmcp/run.sh config check
+(cd /Users/gmcp && sudo -u gmcp /Users/gmcp/run.sh config check)   # from your repo dir it fails with EACCES uv_cwd
 sudo deploy/macos/install-services.sh   # loads both LaunchDaemons, curls /health
 ```
 
@@ -95,6 +95,9 @@ sudo install -m 600 ~/.cloudflared/<UUID>.json /etc/cloudflared/
 # write /etc/cloudflared/config.yml from deploy/macos/cloudflared-config.example.yml
 cloudflared tunnel route dns gmcp gmcp.davisregenerative.com
 sudo cloudflared service install
+# the macOS daemon is installed without "tunnel run"; fix its arguments:
+sudo plutil -replace ProgramArguments -json '["/opt/homebrew/bin/cloudflared","--no-autoupdate","--config","/etc/cloudflared/config.yml","tunnel","run"]' /Library/LaunchDaemons/com.cloudflare.cloudflared.plist
+sudo launchctl bootout system/com.cloudflare.cloudflared; sudo launchctl bootstrap system /Library/LaunchDaemons/com.cloudflare.cloudflared.plist
 ```
 
 From off your network: `curl https://gmcp.davisregenerative.com/health` returns `{"status":"ok",…}`.
