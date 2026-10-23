@@ -199,6 +199,21 @@ export const BUNDLE_CATALOG: Record<string, BundleCatalogEntry> = {
     description: 'Search and read Drive files (no edits or sharing).',
     risk: 'medium',
   },
+  drive_full: {
+    scopes: ['https://www.googleapis.com/auth/drive'],
+    description: 'Read, create, edit, move and trash any Drive file. Sharing is still gated by write-control.',
+    risk: 'high',
+  },
+  docs: {
+    scopes: ['https://www.googleapis.com/auth/documents'],
+    description: 'Create and edit Google Docs. Moving them into folders needs drive_full.',
+    risk: 'medium',
+  },
+  sheets: {
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    description: 'Create and edit Google Sheets. Moving them into folders needs drive_full.',
+    risk: 'medium',
+  },
 };
 
 /** One-way soft-rename map (UD5): empty at 6.0.0; the mechanism ships now so a

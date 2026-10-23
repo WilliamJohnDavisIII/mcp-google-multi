@@ -7,7 +7,7 @@
   "scopeProfiles": {
     "narrow": {
       "includesBase": false,
-      "bundles": ["gmail_readonly", "gmail_compose", "calendar_readonly", "calendar_events", "drive_readonly"]
+      "bundles": ["gmail_readonly", "gmail_compose", "calendar_readonly", "calendar_events", "drive_full", "docs", "sheets", "slides"]
     }
   }
 }

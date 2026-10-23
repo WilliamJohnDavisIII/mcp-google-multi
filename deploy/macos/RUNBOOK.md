@@ -111,10 +111,10 @@ claude.ai → Settings → Connectors → Add custom connector. Name "Google (al
 Cloudflare dashboard → your zone → Security → WAF → Custom rules → Create:
 
 ```
-(http.request.uri.path in {"/mcp" "/token" "/register"} or starts_with(http.request.uri.path, "/.well-known")) and not ip.src in {160.79.104.0/21}
+http.request.uri.path in {"/mcp" "/token" "/register"} and not ip.src in {160.79.104.0/21}
 ```
 
-Action: **Block**. Add your home IP to the set if you'll use Claude Code against it.
+Action: **Block**. Leave `/.well-known/*` open: it is public OAuth metadata, and gating it only makes `doctor`'s probe from this Mac fail with 403. Add your home IP to the set if you'll use Claude Code against it.
 
 Rate limiting rules → one per-IP rule: `http.request.uri.path in {"/authorize" "/callback"}`, e.g. 20 requests / 1 minute, Block for 10 minutes.
 
